@@ -1,0 +1,43 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+const CHANNELS = new Set([
+  'cards.list',
+  'cards.create',
+  'cards.update',
+  'cards.delete',
+  'profiles.get',
+  'profiles.save',
+  'categories.list',
+  'categories.create',
+  'categories.update',
+  'categories.delete',
+  'rules.list',
+  'rules.create',
+  'rules.update',
+  'rules.delete',
+  'rules.rerun',
+  'budgets.list',
+  'budgets.upsert',
+  'budgets.delete',
+  'transactions.list',
+  'transactions.update',
+  'transactions.bulkUpdate',
+  'import.pickFile',
+  'import.preview',
+  'import.commit',
+  'import.batches',
+  'dashboard.getKpis',
+  'db.getPath',
+  'db.backup',
+  'db.restore',
+  'app.version'
+])
+
+contextBridge.exposeInMainWorld('api', {
+  invoke: (channel: string, payload?: unknown): Promise<unknown> => {
+    if (!CHANNELS.has(channel)) {
+      return Promise.resolve({ ok: false, error: `Unknown channel: ${channel}` })
+    }
+    return ipcRenderer.invoke(channel, payload)
+  }
+})

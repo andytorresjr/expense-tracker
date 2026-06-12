@@ -1,0 +1,52 @@
+{
+  "name": "expense-tracker",
+  "version": "0.1.0",
+  "description": "Local expense tracker for company card statements. Fully offline.",
+  "main": "./out/main/index.js",
+  "author": "UNIMEX",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "rebuild": "cd node_modules/better-sqlite3 && npx prebuild-install -r electron -t 41.7.2",
+    "postinstall": "npm run rebuild",
+    "selftest": "npm run build && electron . --selftest",
+    "dist": "electron-vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.unimex.expense-tracker",
+    "productName": "Expense Tracker",
+    "npmRebuild": false,
+    "files": ["out/**"],
+    "win": {
+      "target": ["nsis", "portable"]
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "papaparse": "^5.5.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.9.3",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "autoprefixer": "^10.5.0",
+    "electron": "^41.7.2",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "postcss": "^8.5.15",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "recharts": "^3.8.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.5"
+  }
+}
