@@ -3,6 +3,7 @@ import type { ExpenseTypeFilter } from '@shared/types'
 import ImportWizard from './screens/ImportWizard'
 import Transactions from './screens/Transactions'
 import CategoriesRules from './screens/CategoriesRules'
+import Dashboard from './screens/Dashboard'
 import Placeholder from './screens/Placeholder'
 
 type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'cards' | 'settings'
@@ -88,7 +89,7 @@ export default function App(): React.JSX.Element {
           <main className="flex-1 overflow-auto p-6">
             {screen === 'import' && <ImportWizard onDone={() => setScreen('transactions')} />}
             {screen === 'transactions' && <Transactions />}
-            {screen === 'dashboard' && <Placeholder title="Dashboard" note="KPI widgets arrive in the next milestone." />}
+            {screen === 'dashboard' && <Dashboard />}
             {screen === 'categories' && <CategoriesRules />}
             {screen === 'cards' && <Placeholder title="Cards" note="Card management arrives in the next milestone. You can create cards during import." />}
             {screen === 'settings' && <Placeholder title="Settings" note="Backup & restore arrives in the next milestone." />}
