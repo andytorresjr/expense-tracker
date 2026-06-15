@@ -7,8 +7,9 @@
 import { app } from 'electron'
 import { existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
+import * as XLSX from 'xlsx'
 import { initDb, closeDb } from './db'
-import { buildPreview, commitImport, parseFile } from './importer'
+import { buildPreview, commitImport, detectHeaderRow, parseFile } from './importer'
 import { rerunRules } from './rules'
 import type { Card, ColumnMapping, CommitRow, ExpenseType } from '@shared/types'
 
@@ -135,6 +136,79 @@ export async function runSelfTest(): Promise<number> {
   rerunRules(db)
   const afterRerun = db.prepare('SELECT expense_type FROM transactions WHERE id = ?').get(victim.id) as { expense_type: ExpenseType }
   check('rule re-run respects type_locked', afterRerun.expense_type === 'personal')
+
+  console.log('\n[7] Header detection: preamble (Amex-style) statements')
+  // Amex .xlsx exports lead with title/account-holder/account-number rows and a
+  // blank spacer before the real header, with a trailing unlabeled column.
+  const amexAoa: string[][] = [
+    ['Transaction Details', 'American Express Gold Card / May 13, 2026 to Jun 12, 2026', '', '', ''],
+    ['Prepared for', '', '', '', ''],
+    ['ANDRES TORRES', '', '', '', ''],
+    ['Account Number', '', '', '', ''],
+    ['XXXX-XXXXXX-51001', '', '', '', ''],
+    ['', '', '', '', ''],
+    ['Date', 'Description', 'Amount', 'Category', ''],
+    ['06/10/2026', 'APPLE.COM/BILL INTERNET CHARGE', '0.99', 'Merchandise & Supplies', ''],
+    ['06/01/2026', "AMEX DUNKIN' CREDIT", '-7.00', 'Fees & Adjustments', ''],
+    ['05/22/2026', 'CLAUDE.AI SUBSCRIPTION', '21.32', 'Computer Supplies', '']
+  ]
+  check('detectHeaderRow: clean file → row 0', detectHeaderRow([['Date', 'Amount'], ['1', '2']]) === 0)
+  check('detectHeaderRow: skips preamble → row 6', detectHeaderRow(amexAoa) === 6, `got ${detectHeaderRow(amexAoa)}`)
+
+  // Regression cases for header-detection failure modes (see review findings):
+  // a sparse first data row must NOT steal the header from row 0.
+  const sparseFirst = [
+    ['Date', 'Description', 'Category', 'Reference', 'Notes', 'Amount'],
+    ['01/02/2026', '', '', '', '', '100.00'],
+    ['01/03/2026', 'GROCERY STORE', 'Food', 'REF1', 'note', '40.00'],
+    ['01/04/2026', 'GAS STATION', 'Auto', 'REF2', 'note', '55.00']
+  ]
+  check('detectHeaderRow: sparse first data row → row 0', detectHeaderRow(sparseFirst) === 0, `got ${detectHeaderRow(sparseFirst)}`)
+
+  // a leading summary/total block (bank exports) must not win over the real header.
+  const summaryBlock = [
+    ['Account Number', 'XXXX1234', 'Statement Period', '05/01/2026 - 05/31/2026'],
+    ['Beginning Balance', '1,234.56', 'Ending Balance', '2,345.67'],
+    ['Date', 'Description', 'Amount', 'Balance'],
+    ['05/02/2026', 'GROCERY', '-42.10', '2,303.57'],
+    ['05/03/2026', 'GAS', '-30.00', '2,273.57']
+  ]
+  check('detectHeaderRow: leading summary block → row 2', detectHeaderRow(summaryBlock) === 2, `got ${detectHeaderRow(summaryBlock)}`)
+
+  // a same-row label/value preamble on a narrow statement must not win.
+  const labelValuePreamble = [
+    ['Prepared For', 'ANDRES TORRES', '', ''],
+    ['Account Number', 'XXXX-XXXXXX-51001', '', ''],
+    ['Date', 'Description', 'Amount', 'Category'],
+    ['06/10/2026', 'APPLE.COM', '0.99', 'Supplies'],
+    ['06/11/2026', 'WHATABURGER', '12.50', 'Restaurant']
+  ]
+  check('detectHeaderRow: label/value preamble → row 2', detectHeaderRow(labelValuePreamble) === 2, `got ${detectHeaderRow(labelValuePreamble)}`)
+
+  // a 2-cell title banner directly above the header must not win.
+  const banner = [
+    ['American Express', 'May 2026 Statement', '', ''],
+    ['Date', 'Description', 'Amount', 'Balance'],
+    ['06/10/2026', 'APPLE.COM', '0.99', '1200.50'],
+    ['06/11/2026', 'WHATABURGER', '12.50', '1213.00']
+  ]
+  check('detectHeaderRow: 2-cell banner above header → row 1', detectHeaderRow(banner) === 1, `got ${detectHeaderRow(banner)}`)
+
+  const amexPath = join(app.getPath('userData'), 'selftest-amex.xlsx')
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(amexAoa), 'Transaction Details')
+  XLSX.writeFile(wb, amexPath)
+  const amex = parseFile(amexPath)
+  check(
+    'amex: real columns recovered (Date/Amount/Category)',
+    ['Date', 'Amount', 'Category'].every((h) => amex.headers.includes(h)),
+    JSON.stringify(amex.headers)
+  )
+  check('amex: no __EMPTY / blank columns leak through', !amex.headers.some((h) => h === '' || h.startsWith('__EMPTY')))
+  check('amex: 6 preamble rows skipped, 3 txns parsed', amex.rowCount === 3, `got ${amex.rowCount}`)
+  const amexCredit = amex.rows.find((r) => r.Description?.includes('DUNKIN'))
+  check('amex: negative amount preserved through parse', amexCredit?.Amount === '-7.00', `got ${amexCredit?.Amount}`)
+  if (existsSync(amexPath)) unlinkSync(amexPath)
 
   closeDb()
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}\n`)

@@ -18,36 +18,130 @@ import { applyRules, loadRules } from './rules'
 
 // ---------- file parsing ----------
 
+/** Raw cell grid read from a file before the header row is known. */
+type Matrix = string[][]
+
+/** True when a cell reads as transaction data — a parseable date or amount. */
+function isValueCell(cell: string): boolean {
+  return cell !== '' && (parseAmount(cell) !== null || parseDate(cell, 'auto') !== null)
+}
+
+/**
+ * Locate the column-header row in a raw cell grid.
+ *
+ * Statements frequently carry non-transaction rows above the real header:
+ *  - preamble lines — Amex .xlsx leads with a title, "Prepared for", the account
+ *    holder, the account number and a blank spacer;
+ *  - summary/total blocks — many bank exports open with beginning/ending balance
+ *    and total credit/debit lines.
+ *
+ * The header is distinguished by three traits, all required: it spans (nearly)
+ * the full width of the widest row; it carries only text labels — no dates or
+ * amounts, unlike both data rows *and* summary lines; and it sits directly above
+ * value-bearing data. Requiring near-full width rejects narrow summary blocks and
+ * 2-cell title banners; the "no values" test rejects label/value preamble pairs
+ * and summary rows; the "data follows" test rejects a stray all-label line that
+ * isn't actually a header. Taking the first such row keeps trailing totals out.
+ *
+ * Fallbacks cover atypical files (e.g. headers whose column names look numeric);
+ * a degenerate single-column grid ultimately falls back to row 0.
+ */
+export function detectHeaderRow(matrix: Matrix): number {
+  const fill = matrix.map((row) => row.reduce((n, c) => (c.trim() !== '' ? n + 1 : n), 0))
+  const values = matrix.map((row) => row.reduce((n, c) => (isValueCell(c.trim()) ? n + 1 : n), 0))
+  const maxFill = Math.max(0, ...fill)
+  if (maxFill === 0) return 0
+  // Allow one short cell so a header with an empty trailing label still counts.
+  const widthBar = Math.max(2, maxFill - 1)
+
+  const dataFollows = (i: number): boolean => {
+    for (let j = i + 1; j < matrix.length; j++) {
+      if (fill[j] === 0) continue // skip blank spacer rows
+      return values[j] > 0
+    }
+    return false
+  }
+
+  // Primary: a (near-)full-width row of pure labels sitting above real data.
+  for (let i = 0; i < matrix.length; i++) {
+    if (fill[i] >= widthBar && values[i] === 0 && dataFollows(i)) return i
+  }
+  // Fallback A: two adjacent (near-)full-width rows — for headers whose own
+  // column names parse as values, which the pure-label test above rejects.
+  for (let i = 0; i < matrix.length - 1; i++) {
+    if (fill[i] >= widthBar && fill[i + 1] >= widthBar) return i
+  }
+  // Fallback B: any (near-)full-width row (e.g. a header-only file).
+  for (let i = 0; i < matrix.length; i++) {
+    if (fill[i] >= widthBar) return i
+  }
+  return 0
+}
+
+/**
+ * Turn a raw cell grid into a header list plus rows keyed by header name.
+ * Detects the header row, drops unlabeled (blank-header) columns so they don't
+ * surface as "__EMPTY" in the mapping UI, de-duplicates repeated header names
+ * (suffixing `_2`, `_3`, …) so no column silently overwrites another, trims
+ * every value, and skips rows that are entirely blank.
+ */
+function recordsFromMatrix(matrix: Matrix): { headers: string[]; rows: Record<string, string>[] } {
+  const headerIdx = detectHeaderRow(matrix)
+  const rawHeader = matrix[headerIdx] ?? []
+
+  const seen = new Map<string, number>()
+  const columns: { index: number; key: string }[] = []
+  rawHeader.forEach((cell, index) => {
+    const name = cell.trim()
+    if (!name) return // unlabeled column — not mappable, so omit it
+    const prior = seen.get(name) ?? 0
+    seen.set(name, prior + 1)
+    columns.push({ index, key: prior === 0 ? name : `${name}_${prior + 1}` })
+  })
+
+  const headers = columns.map((c) => c.key)
+  const rows: Record<string, string>[] = []
+  for (let r = headerIdx + 1; r < matrix.length; r++) {
+    const row = matrix[r] ?? []
+    const record: Record<string, string> = {}
+    let hasValue = false
+    for (const { index, key } of columns) {
+      const value = (row[index] ?? '').trim()
+      if (value) hasValue = true
+      record[key] = value
+    }
+    if (hasValue) rows.push(record)
+  }
+  return { headers, rows }
+}
+
 export function parseFile(filePath: string): ParsedFile {
   const ext = extname(filePath).toLowerCase()
-  let headers: string[] = []
-  let rows: Record<string, string>[] = []
+  let matrix: Matrix
 
   if (ext === '.csv') {
-    const content = readFileSync(filePath, 'utf8')
-    const result = Papa.parse<Record<string, string>>(content, {
-      header: true,
-      skipEmptyLines: 'greedy',
-      transformHeader: (h) => h.trim()
-    })
-    headers = result.meta.fields ?? []
-    rows = result.data
+    // strip a leading BOM so it can't cling to the first header name
+    const content = readFileSync(filePath, 'utf8').replace(/^﻿/, '')
+    const result = Papa.parse<string[]>(content, { skipEmptyLines: 'greedy' })
+    matrix = result.data.map((row) => row.map((c) => String(c ?? '')))
   } else if (ext === '.xlsx' || ext === '.xls') {
     const workbook = XLSX.read(readFileSync(filePath), { type: 'buffer' })
     const sheet = workbook.Sheets[workbook.SheetNames[0]]
     if (!sheet) throw new Error('The workbook has no sheets.')
-    // raw:false formats cells (incl. dates) as display text, so everything is a string
-    const json = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { raw: false, defval: '' })
-    rows = json.map((r) => {
-      const clean: Record<string, string> = {}
-      for (const [k, v] of Object.entries(r)) clean[k.trim()] = String(v ?? '').trim()
-      return clean
+    // header:1 reads the sheet as a raw grid (no header assumed); raw:false
+    // renders dates/numbers as display text so every cell comes through a string
+    const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      raw: false,
+      blankrows: false,
+      defval: ''
     })
-    headers = rows.length > 0 ? Object.keys(rows[0]) : []
+    matrix = aoa.map((row) => row.map((c) => String(c ?? '')))
   } else {
     throw new Error(`Unsupported file type: ${ext}. Use .csv, .xlsx or .xls.`)
   }
 
+  const { headers, rows } = recordsFromMatrix(matrix)
   if (headers.length === 0 || rows.length === 0) {
     throw new Error('No data rows found in the file.')
   }
