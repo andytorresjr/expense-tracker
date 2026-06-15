@@ -75,6 +75,9 @@ export const api = {
     getPath: () => call<string>('db.getPath'),
     backup: () => call<string | null>('db.backup'),
     restore: () => call<string | null>('db.restore')
+  },
+  app: {
+    version: () => call<string>('app.version')
   }
 }
 
