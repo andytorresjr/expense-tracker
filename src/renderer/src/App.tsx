@@ -2,6 +2,7 @@ import { createContext, useContext, useState } from 'react'
 import type { ExpenseTypeFilter } from '@shared/types'
 import ImportWizard from './screens/ImportWizard'
 import Transactions from './screens/Transactions'
+import CategoriesRules from './screens/CategoriesRules'
 import Placeholder from './screens/Placeholder'
 
 type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'cards' | 'settings'
@@ -88,9 +89,7 @@ export default function App(): React.JSX.Element {
             {screen === 'import' && <ImportWizard onDone={() => setScreen('transactions')} />}
             {screen === 'transactions' && <Transactions />}
             {screen === 'dashboard' && <Placeholder title="Dashboard" note="KPI widgets arrive in the next milestone." />}
-            {screen === 'categories' && (
-              <Placeholder title="Categories & Rules" note="Category, rule and budget management arrives in the next milestone." />
-            )}
+            {screen === 'categories' && <CategoriesRules />}
             {screen === 'cards' && <Placeholder title="Cards" note="Card management arrives in the next milestone. You can create cards during import." />}
             {screen === 'settings' && <Placeholder title="Settings" note="Backup & restore arrives in the next milestone." />}
           </main>

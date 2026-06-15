@@ -83,6 +83,8 @@ export interface PreviewRow {
   description: string
   amount: number | null
   expense_type: ExpenseType
+  /** true when no rule classified the type — it fell back to the default and likely needs a look */
+  needsReview: boolean
   category_id: number | null
   category_name: string | null
   duplicate: boolean

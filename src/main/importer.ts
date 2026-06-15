@@ -56,6 +56,13 @@ export function parseFile(filePath: string): ParsedFile {
 
 // ---------- normalization ----------
 
+/**
+ * Expense type used only when no rule classifies a row. Statements mix business
+ * and personal, so there is no meaningful per-card default — merchant rules do
+ * the splitting and these fall-through rows are flagged for review.
+ */
+const FALLBACK_EXPENSE_TYPE: ExpenseType = 'business'
+
 const DATE_FORMATS = ['YYYY-MM-DD', 'MM/DD/YYYY', 'DD/MM/YYYY'] as const
 
 function pad(n: number): string {
@@ -176,7 +183,7 @@ export function buildPreview(
 
     const matched = error ? { category_id: null, expense_type: null } : applyRules(rules, description)
     const category_id = matched.category_id
-    const expense_type: ExpenseType = matched.expense_type ?? card.default_expense_type
+    const expense_type: ExpenseType = matched.expense_type ?? FALLBACK_EXPENSE_TYPE
 
     return {
       index,
@@ -184,6 +191,7 @@ export function buildPreview(
       description,
       amount,
       expense_type,
+      needsReview: !error && matched.expense_type === null,
       category_id,
       category_name: category_id !== null ? (categoryNames.get(category_id) ?? null) : null,
       duplicate,

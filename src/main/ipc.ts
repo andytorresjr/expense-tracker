@@ -128,16 +128,14 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
 export function registerIpcHandlers(): void {
   // ---- cards ----
   handle('cards.list', () => getDb().prepare('SELECT * FROM cards ORDER BY name').all())
-  handle('cards.create', (p: { name: string; default_expense_type: ExpenseType }) => {
-    const result = getDb()
-      .prepare('INSERT INTO cards (name, default_expense_type) VALUES (?, ?)')
-      .run(p.name.trim(), p.default_expense_type)
+  handle('cards.create', (p: { name: string }) => {
+    // No per-card expense type: statements mix both, so the column keeps its DB default
+    // and merchant rules do the business/personal split. See importer FALLBACK_EXPENSE_TYPE.
+    const result = getDb().prepare('INSERT INTO cards (name) VALUES (?)').run(p.name.trim())
     return getDb().prepare('SELECT * FROM cards WHERE id = ?').get(result.lastInsertRowid)
   })
-  handle('cards.update', (p: { id: number; name: string; default_expense_type: ExpenseType }) => {
-    getDb()
-      .prepare('UPDATE cards SET name = ?, default_expense_type = ? WHERE id = ?')
-      .run(p.name.trim(), p.default_expense_type, p.id)
+  handle('cards.update', (p: { id: number; name: string }) => {
+    getDb().prepare('UPDATE cards SET name = ? WHERE id = ?').run(p.name.trim(), p.id)
     return getDb().prepare('SELECT * FROM cards WHERE id = ?').get(p.id)
   })
   handle('cards.delete', (p: { id: number }) => {

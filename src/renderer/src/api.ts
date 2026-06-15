@@ -27,10 +27,8 @@ async function call<T>(channel: string, payload?: unknown): Promise<T> {
 export const api = {
   cards: {
     list: () => call<Card[]>('cards.list'),
-    create: (name: string, default_expense_type: ExpenseType) =>
-      call<Card>('cards.create', { name, default_expense_type }),
-    update: (id: number, name: string, default_expense_type: ExpenseType) =>
-      call<Card>('cards.update', { id, name, default_expense_type }),
+    create: (name: string) => call<Card>('cards.create', { name }),
+    update: (id: number, name: string) => call<Card>('cards.update', { id, name }),
     remove: (id: number) => call<boolean>('cards.delete', { id })
   },
   profiles: {

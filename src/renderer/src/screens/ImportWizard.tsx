@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Card, ColumnMapping, ExpenseType, ImportPreview, ImportResult, ParsedFile } from '@shared/types'
+import type {
+  Card,
+  Category,
+  ColumnMapping,
+  ExpenseType,
+  ImportPreview,
+  ImportResult,
+  ParsedFile,
+  PreviewRow
+} from '@shared/types'
 import { api, fmtMoney } from '../api'
+import RuleModal, { type RuleDraft } from '../components/RuleModal'
 
 const EMPTY_MAPPING: ColumnMapping = {
   date_col: '',
@@ -48,17 +58,19 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
 
   const [parsed, setParsed] = useState<ParsedFile | null>(null)
   const [cards, setCards] = useState<Card[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
   const [cardId, setCardId] = useState<number | null>(null)
   const [newCardName, setNewCardName] = useState('')
-  const [newCardType, setNewCardType] = useState<ExpenseType>('business')
   const [mapping, setMapping] = useState<ColumnMapping>(EMPTY_MAPPING)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [typeOverrides, setTypeOverrides] = useState<Record<number, ExpenseType>>({})
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
 
   useEffect(() => {
     api.cards.list().then(setCards).catch((e) => setError(e.message))
+    api.categories.list().then(setCategories).catch((e) => setError(e.message))
   }, [])
 
   const run = async (fn: () => Promise<void>): Promise<void> => {
@@ -102,26 +114,48 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
   const createCard = (): Promise<void> =>
     run(async () => {
       if (!newCardName.trim()) throw new Error('Give the card a name first.')
-      const card = await api.cards.create(newCardName.trim(), newCardType)
+      const card = await api.cards.create(newCardName.trim())
       setCards([...cards, card])
       setNewCardName('')
       await chooseCard(card.id)
     })
 
+  const refreshPreview = async (): Promise<ImportPreview | null> => {
+    if (!parsed || !cardId) return null
+    const p = await api.import.preview(cardId, parsed.rows, mapping)
+    setPreview(p)
+    return p
+  }
+
   const buildPreview = (): Promise<void> =>
     run(async () => {
-      if (!parsed || !cardId) return
       if (!mapping.date_col || !mapping.amount_col || !mapping.description_col) {
         throw new Error('Map the Date, Amount and Description columns first.')
       }
-      const p = await api.import.preview(cardId, parsed.rows, mapping)
-      setPreview(p)
+      await refreshPreview()
       setTypeOverrides({})
       setSelected(new Set())
       setStep(3)
     })
 
   const effectiveType = (index: number, fallback: ExpenseType): ExpenseType => typeOverrides[index] ?? fallback
+
+  const saveRule = (draft: RuleDraft): Promise<void> =>
+    run(async () => {
+      await api.rules.create({
+        category_id: draft.category_id,
+        expense_type: draft.expense_type,
+        match_type: draft.match_type,
+        pattern: draft.pattern,
+        priority: draft.priority
+      })
+      setRuleDraft(null)
+      // re-run the engine so the new rule re-classifies the rest of this statement,
+      // then drop manual overrides for rows the rule now covers so its result shows through
+      await refreshPreview()
+      setTypeOverrides({})
+      setSelected(new Set())
+    })
 
   const commit = (): Promise<void> =>
     run(async () => {
@@ -157,7 +191,21 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
     setSelected(new Set())
   }
 
+  const openRuleFor = (row: PreviewRow): void => {
+    setRuleDraft({
+      pattern: row.description,
+      match_type: 'contains',
+      expense_type: effectiveType(row.index, row.expense_type),
+      category_id: row.category_id,
+      priority: 0
+    })
+  }
+
   const previewRows = useMemo(() => preview?.rows.slice(0, 300) ?? [], [preview])
+  const reviewCount = useMemo(
+    () => preview?.rows.filter((r) => !r.error && !r.duplicate && r.needsReview).length ?? 0,
+    [preview]
+  )
 
   if (result) {
     return (
@@ -223,9 +271,6 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
                 className="w-full flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3 hover:border-blue-400 hover:bg-blue-50 text-left"
               >
                 <span className="font-medium text-slate-700">💳 {card.name}</span>
-                <span className="text-xs text-slate-500">
-                  new charges default to <TypePill value={card.default_expense_type} />
-                </span>
               </button>
             ))}
             {cards.length === 0 && <p className="text-sm text-slate-500">No cards yet — add the first one below.</p>}
@@ -238,23 +283,17 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
                 placeholder="e.g. Owner Personal Visa"
                 value={newCardName}
                 onChange={(e) => setNewCardName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && createCard()}
               />
-            </label>
-            <label className="text-sm text-slate-600">
-              Charges are usually
-              <select
-                className="input block mt-1"
-                value={newCardType}
-                onChange={(e) => setNewCardType(e.target.value as ExpenseType)}
-              >
-                <option value="business">Business</option>
-                <option value="personal">Personal</option>
-              </select>
             </label>
             <button className="btn-secondary" onClick={createCard} disabled={busy}>
               Add card
             </button>
           </div>
+          <p className="text-xs text-slate-500">
+            Statements mix business and personal charges — the split is decided per transaction by your merchant rules,
+            not by the card.
+          </p>
         </div>
       )}
 
@@ -360,6 +399,14 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
             )}
           </div>
 
+          {reviewCount > 0 && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2.5 text-sm">
+              <strong>{reviewCount}</strong> row{reviewCount === 1 ? '' : 's'} matched no rule and defaulted to{' '}
+              <em>business</em>. Toggle the ones that are personal, or click <strong>+ rule</strong> on a row so this
+              merchant classifies itself on every future import.
+            </div>
+          )}
+
           {selected.size > 0 && (
             <div className="flex items-center gap-3 rounded-lg bg-slate-50 border border-slate-200 px-4 py-2 text-sm">
               <span className="text-slate-600">{selected.size} selected:</span>
@@ -384,8 +431,12 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
               <tbody>
                 {previewRows.map((row) => {
                   const skippedRow = !!row.error || row.duplicate
+                  const review = !skippedRow && row.needsReview && typeOverrides[row.index] === undefined
                   return (
-                    <tr key={row.index} className={`border-t border-slate-100 ${skippedRow ? 'opacity-50' : ''}`}>
+                    <tr
+                      key={row.index}
+                      className={`border-t border-slate-100 ${skippedRow ? 'opacity-50' : review ? 'bg-amber-50' : ''}`}
+                    >
                       <td className="px-3 py-1.5">
                         {!skippedRow && (
                           <input
@@ -405,24 +456,37 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
                       <td className="px-3 py-1.5 text-right whitespace-nowrap">{row.amount !== null ? fmtMoney(row.amount) : '—'}</td>
                       <td className="px-3 py-1.5">{row.category_name ?? <span className="text-slate-400">Uncategorized</span>}</td>
                       <td className="px-3 py-1.5">
-                        <TypePill
-                          value={effectiveType(row.index, row.expense_type)}
-                          onToggle={
-                            skippedRow
-                              ? undefined
-                              : () =>
-                                  setTypeOverrides({
-                                    ...typeOverrides,
-                                    [row.index]: effectiveType(row.index, row.expense_type) === 'business' ? 'personal' : 'business'
-                                  })
-                          }
-                        />
+                        <div className="flex items-center gap-2">
+                          <TypePill
+                            value={effectiveType(row.index, row.expense_type)}
+                            onToggle={
+                              skippedRow
+                                ? undefined
+                                : () =>
+                                    setTypeOverrides({
+                                      ...typeOverrides,
+                                      [row.index]: effectiveType(row.index, row.expense_type) === 'business' ? 'personal' : 'business'
+                                    })
+                            }
+                          />
+                          {!skippedRow && (
+                            <button
+                              onClick={() => openRuleFor(row)}
+                              title="Create a rule from this merchant"
+                              className="text-xs text-slate-400 hover:text-blue-600"
+                            >
+                              + rule
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-1.5 text-xs whitespace-nowrap">
                         {row.error ? (
                           <span className="text-red-600" title={row.error}>⚠ {row.error}</span>
                         ) : row.duplicate ? (
                           <span className="text-amber-600">Already imported</span>
+                        ) : review ? (
+                          <span className="text-amber-600">Needs review</span>
                         ) : (
                           <span className="text-green-600">New</span>
                         )}
@@ -446,6 +510,17 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
             </button>
           </div>
         </div>
+      )}
+
+      {ruleDraft && (
+        <RuleModal
+          draft={ruleDraft}
+          categories={categories}
+          busy={busy}
+          onChange={setRuleDraft}
+          onCancel={() => setRuleDraft(null)}
+          onSave={() => saveRule(ruleDraft)}
+        />
       )}
     </div>
   )
