@@ -24,8 +24,11 @@ Grab the latest installer from the **[Releases page »](https://github.com/andyt
 
 From v1.2.2 on, the app can update itself. Open **Settings → Updates → Check for updates**: it
 checks GitHub for a newer release and, only if you confirm, downloads and installs it, then restarts.
+The update prompt shows that version's release notes (with a link to the full notes on GitHub).
 The app stays fully offline otherwise — the check is the one time it touches the network, and no data
 is ever sent.
+
+See **[CHANGELOG.md](CHANGELOG.md)** or the [Releases page](https://github.com/andytorresjr/expense-tracker/releases) for what changed in each version.
 
 ---
 

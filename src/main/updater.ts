@@ -1,14 +1,43 @@
-import { app, dialog, BrowserWindow } from 'electron'
+import { app, dialog, shell, BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateStatus } from '@shared/types'
 
 // electron-updater ships as CommonJS; destructure the default export for ESM interop.
 const { autoUpdater } = electronUpdater
 
+const REPO = 'andytorresjr/expense-tracker'
+const releasePageUrl = (version: string): string => `https://github.com/${REPO}/releases/tag/v${version}`
+
 /** Show a native message box, anchored to the window when we have one. */
 function ask(win: BrowserWindow | null, options: Electron.MessageBoxOptions): Promise<number> {
   const result = win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)
   return result.then((r) => r.response)
+}
+
+/** Pull the release notes (markdown body + page URL) for a version off the public GitHub API. */
+async function fetchReleaseNotes(version: string): Promise<{ body: string; url: string }> {
+  const url = releasePageUrl(version)
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${version}`, {
+      headers: { 'User-Agent': 'Expense-Tracker-Updater', Accept: 'application/vnd.github+json' }
+    })
+    if (!res.ok) return { body: '', url }
+    const data = (await res.json()) as { body?: string; html_url?: string }
+    return { body: (data.body ?? '').trim(), url: data.html_url || url }
+  } catch {
+    return { body: '', url }
+  }
+}
+
+/** Lightly strip markdown so release notes read cleanly inside a native dialog. */
+function mdToPlain(md: string, max = 1200): string {
+  const plain = md
+    .replace(/`{1,3}/g, '')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/^\s*>\s?/gm, '')
+    .trim()
+  return plain.length > max ? `${plain.slice(0, max).trimEnd()}\n…` : plain
 }
 
 let inProgress = false
@@ -55,15 +84,28 @@ export async function checkForUpdates(win: BrowserWindow | null): Promise<Update
       })
 
       autoUpdater.on('update-available', async (info: { version: string }) => {
-        const wantsDownload = await ask(win, {
-          type: 'info',
-          buttons: ['Download && install', 'Not now'],
-          defaultId: 0,
-          cancelId: 1,
-          title: 'Update available',
-          message: `Expense Tracker v${info.version} is available.`,
-          detail: `You have v${version}. Download the update now?`
-        })
+        const notes = await fetchReleaseNotes(info.version)
+        const whatsNew = notes.body ? `\n\nWhat's new:\n${mdToPlain(notes.body)}` : ''
+
+        // Loop so "View full notes online" can open GitHub and return to the prompt.
+        let wantsDownload = 1
+        for (;;) {
+          const choice = await ask(win, {
+            type: 'info',
+            buttons: ['Download && install', 'View full notes online', 'Not now'],
+            defaultId: 0,
+            cancelId: 2,
+            title: `Update available — v${info.version}`,
+            message: `Expense Tracker v${info.version} is available (you have v${version}).${whatsNew}`,
+            detail: 'Download and install the update now?'
+          })
+          if (choice === 1) {
+            await shell.openExternal(notes.url)
+            continue
+          }
+          wantsDownload = choice === 0 ? 0 : 1
+          break
+        }
         if (wantsDownload !== 0) {
           finish({ state: 'declined', version, latestVersion: info.version, message: `Update to v${info.version} postponed.` })
           return
