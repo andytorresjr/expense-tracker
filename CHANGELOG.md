@@ -4,6 +4,10 @@ All notable changes to Expense Tracker. The same notes appear on each
 [GitHub release](https://github.com/andytorresjr/expense-tracker/releases), and the
 in-app updater shows them when a new version is found.
 
+## 1.2.4-beta.1 — 2026-06-18
+- Moved to **beta** version labeling (`-beta` suffix) while the app is in pre-production. The version shown in the app, installers, and releases now reads e.g. `v1.2.4-beta.1`.
+- The in-app updater now accepts pre-release builds, so beta installs update to newer betas (and to the eventual production release).
+
 ## 1.2.3 — 2026-06-18
 - The in-app updater now shows the release notes for a new version in the update prompt, with a **View full notes online** button that opens the GitHub release.
 - Published `CHANGELOG.md` so version history renders directly in the repo.

@@ -12,6 +12,9 @@ it lives in a single SQLite file in your Windows user profile.
 
 ## Download & install (Windows)
 
+> **Beta:** the app is in pre-production. Releases are versioned with a `-beta` suffix
+> (e.g. `v1.2.4-beta.1`) until the production launch.
+
 Grab the latest installer from the **[Releases page »](https://github.com/andytorresjr/expense-tracker/releases/latest)**:
 
 - **`Expense Tracker Setup x.y.z.exe`** — the installer (recommended). Download, run it, and follow the prompts.

@@ -1,6 +1,6 @@
 {
   "name": "expense-tracker",
-  "version": "1.2.3",
+  "version": "1.2.4-beta.1",
   "description": "Local expense tracker for company card statements. Fully offline.",
   "main": "./out/main/index.js",
   "author": {
@@ -26,6 +26,7 @@
     "appId": "com.unimex.expense-tracker",
     "productName": "Expense Tracker",
     "npmRebuild": false,
+    "detectUpdateChannel": false,
     "files": [
       "out/**"
     ],

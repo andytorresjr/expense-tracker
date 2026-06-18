@@ -66,6 +66,10 @@ export async function checkForUpdates(win: BrowserWindow | null): Promise<Update
   inProgress = true
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
+  // We ship pre-release ("-beta") versions during the beta, so the updater must
+  // accept them. Stable releases are always offered too, so this still picks up
+  // the eventual production build.
+  autoUpdater.allowPrerelease = true
   autoUpdater.removeAllListeners()
 
   try {
