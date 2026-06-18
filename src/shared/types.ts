@@ -2,6 +2,7 @@ export type ExpenseType = 'business' | 'personal'
 export type ExpenseTypeFilter = ExpenseType | 'all'
 export type MatchType = 'contains' | 'starts_with' | 'regex'
 export type AmountSign = 'expense_positive' | 'expense_negative'
+export type ExportFormat = 'csv' | 'xlsx' | 'pdf'
 
 export interface Card {
   id: number
@@ -14,6 +15,7 @@ export interface Category {
   id: number
   name: string
   color: string | null
+  hotkey: string | null
   is_archived: 0 | 1
 }
 
@@ -39,7 +41,7 @@ export interface Txn {
   txn_date: string
   description: string
   amount: number
-  expense_type: ExpenseType
+  expense_type: ExpenseType | null
   type_locked: 0 | 1
   category_id: number | null
   category_locked: 0 | 1
@@ -82,8 +84,8 @@ export interface PreviewRow {
   txn_date: string | null
   description: string
   amount: number | null
-  expense_type: ExpenseType
-  /** true when no rule classified the type — it fell back to the default and likely needs a look */
+  expense_type: ExpenseType | null
+  /** true when no rule classified the type — it is visible in All until reviewed */
   needsReview: boolean
   category_id: number | null
   category_name: string | null
@@ -102,7 +104,7 @@ export interface CommitRow {
   txn_date: string
   description: string
   amount: number
-  expense_type: ExpenseType
+  expense_type: ExpenseType | null
   category_id: number | null
 }
 
@@ -112,6 +114,31 @@ export interface ImportResult {
   skipped: number
 }
 
+export interface ExportResult {
+  path: string
+  count: number
+}
+
+export interface ImportBatch {
+  id: number
+  card_id: number
+  filename: string
+  row_count: number
+  inserted_count: number
+  skipped_count: number
+  imported_at: string
+  card_name: string
+  transaction_count: number
+}
+
+export type TransactionClearRequest =
+  | { mode: 'all' }
+  | { mode: 'range'; dateFrom: string; dateTo: string }
+
+export interface TransactionDeleteResult {
+  deleted: number
+}
+
 export interface TxnFilters {
   expenseType?: ExpenseTypeFilter
   cardId?: number
@@ -119,7 +146,7 @@ export interface TxnFilters {
   search?: string
   dateFrom?: string
   dateTo?: string
-  sortBy?: 'txn_date' | 'amount' | 'description'
+  sortBy?: 'txn_date' | 'amount' | 'description' | 'expense_type' | 'category_name'
   sortDir?: 'asc' | 'desc'
   page?: number
   pageSize?: number
@@ -139,7 +166,9 @@ export interface KpiFilters {
 
 export interface Kpis {
   totalSpend: number
+  totalIncome: number
   prevPeriodSpend: number
+  prevPeriodIncome: number
   byCategory: { category: string; color: string | null; total: number }[]
   monthlyTrend: { month: string; total: number }[]
   topVendors: { vendor: string; total: number; count: number }[]

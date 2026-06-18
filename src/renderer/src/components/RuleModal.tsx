@@ -30,8 +30,8 @@ export default function RuleModal({ draft, categories, busy, onChange, onCancel,
       <div className="card-panel w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
         <h2 className="font-semibold text-slate-800">Categorization rule</h2>
         <p className="text-sm text-slate-500">
-          When a transaction&apos;s description matches, set its category and/or its business/personal type. Applied on
-          import and when you re-run rules.
+          When a transaction&apos;s description matches, set its category and/or mark it as Business or Personal. Applied
+          on import and when you re-run rules.
         </p>
 
         <label className="block text-sm text-slate-600">
@@ -61,7 +61,9 @@ export default function RuleModal({ draft, categories, busy, onChange, onCancel,
             <select
               className="input block w-full mt-1"
               value={draft.expense_type ?? ''}
-              onChange={(e) => onChange({ ...draft, expense_type: (e.target.value || null) as ExpenseType | null })}
+              onChange={(e) =>
+                onChange({ ...draft, expense_type: (e.target.value || null) as ExpenseType | null })
+              }
             >
               <option value="">— leave unchanged —</option>
               <option value="business">Business</option>

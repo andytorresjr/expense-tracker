@@ -10,6 +10,7 @@ import type {
   PreviewRow
 } from '@shared/types'
 import { api, fmtMoney } from '../api'
+import ImportHistory from '../components/ImportHistory'
 import RuleModal, { type RuleDraft } from '../components/RuleModal'
 
 const EMPTY_MAPPING: ColumnMapping = {
@@ -26,7 +27,7 @@ function guessMapping(headers: string[]): ColumnMapping {
     headers.find((h) => needles.some((n) => h.toLowerCase().includes(n))) ?? ''
   return {
     date_col: find('transaction date', 'date'),
-    amount_col: find('amount', 'debit'),
+    amount_col: find('amount', 'debit', 'charge'),
     amount_col_secondary: find('credit') || null,
     description_col: find('description', 'merchant', 'payee', 'name'),
     date_format: 'auto',
@@ -34,22 +35,28 @@ function guessMapping(headers: string[]): ColumnMapping {
   }
 }
 
-function TypePill({ value, onToggle }: { value: ExpenseType; onToggle?: () => void }): React.JSX.Element {
+function TypePill({ value, onToggle }: { value: ExpenseType | null; onToggle?: () => void }): React.JSX.Element {
   const styles =
-    value === 'business' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-violet-100 text-violet-700 border-violet-200'
+    value === 'business'
+      ? 'bg-blue-100 text-blue-700 border-blue-200'
+      : value === 'personal'
+        ? 'bg-violet-100 text-violet-700 border-violet-200'
+        : 'bg-slate-100 text-slate-700 border-slate-200'
   return (
     <button
       onClick={onToggle}
       disabled={!onToggle}
-      title={onToggle ? 'Click to switch business/personal' : undefined}
+      title={onToggle ? 'Click to mark Business or Personal' : undefined}
       className={`px-2 py-0.5 rounded-full border text-xs font-medium capitalize ${styles} ${onToggle ? 'hover:opacity-75' : ''}`}
     >
-      {value}
+      {value ?? 'All'}
     </button>
   )
 }
 
 const STEPS = ['Choose file', 'Choose card', 'Map columns', 'Preview & confirm']
+
+const nextReviewedType = (value: ExpenseType | null): ExpenseType => (value === 'business' ? 'personal' : 'business')
 
 export default function ImportWizard({ onDone }: { onDone: () => void }): React.JSX.Element {
   const [step, setStep] = useState(0)
@@ -138,7 +145,7 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
       setStep(3)
     })
 
-  const effectiveType = (index: number, fallback: ExpenseType): ExpenseType => typeOverrides[index] ?? fallback
+  const effectiveType = (index: number, fallback: ExpenseType | null): ExpenseType | null => typeOverrides[index] ?? fallback
 
   const saveRule = (draft: RuleDraft): Promise<void> =>
     run(async () => {
@@ -184,13 +191,6 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
     setSelected(new Set())
   }
 
-  const bulkSet = (type: ExpenseType): void => {
-    const next = { ...typeOverrides }
-    for (const i of selected) next[i] = type
-    setTypeOverrides(next)
-    setSelected(new Set())
-  }
-
   const openRuleFor = (row: PreviewRow): void => {
     setRuleDraft({
       pattern: row.description,
@@ -202,25 +202,56 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
   }
 
   const previewRows = useMemo(() => preview?.rows.slice(0, 300) ?? [], [preview])
-  const reviewCount = useMemo(
-    () => preview?.rows.filter((r) => !r.error && !r.duplicate && r.needsReview).length ?? 0,
+  const selectableIndexes = useMemo(
+    () => preview?.rows.filter((r) => !r.error && !r.duplicate).map((r) => r.index) ?? [],
     [preview]
   )
+  const selectedImportableIndexes = useMemo(
+    () => selectableIndexes.filter((index) => selected.has(index)),
+    [selectableIndexes, selected]
+  )
+  const selectedImportableCount = selectedImportableIndexes.length
+  const allSelectableSelected =
+    selectableIndexes.length > 0 && selectedImportableCount === selectableIndexes.length
+  const reviewCount = useMemo(
+    () =>
+      preview?.rows.filter((r) => !r.error && !r.duplicate && r.needsReview && typeOverrides[r.index] === undefined)
+        .length ?? 0,
+    [preview, typeOverrides]
+  )
+
+  const toggleAllImportable = (checked: boolean): void => {
+    setSelected(checked ? new Set(selectableIndexes) : new Set())
+  }
+
+  const clearSelection = (): void => {
+    setSelected(new Set())
+  }
+
+  const bulkSet = (type: ExpenseType): void => {
+    const next = { ...typeOverrides }
+    for (const i of selectedImportableIndexes) next[i] = type
+    setTypeOverrides(next)
+    setSelected(new Set())
+  }
 
   if (result) {
     return (
-      <div className="card-panel max-w-xl mx-auto p-8 text-center space-y-4">
-        <div className="text-4xl">✅</div>
-        <h2 className="text-xl font-semibold text-slate-800">Import complete</h2>
-        <p className="text-slate-600">
-          <strong>{result.inserted}</strong> transaction{result.inserted === 1 ? '' : 's'} imported,{' '}
-          <strong>{result.skipped}</strong> duplicate{result.skipped === 1 ? '' : 's'} skipped.
-        </p>
-        <p className="text-sm text-slate-500">Your column mapping was saved — next time this card&apos;s statement imports in two clicks.</p>
-        <div className="flex justify-center gap-3 pt-2">
-          <button className="btn-secondary" onClick={reset}>Import another file</button>
-          <button className="btn-primary" onClick={onDone}>View transactions</button>
+      <div className="max-w-5xl mx-auto space-y-4">
+        <div className="card-panel max-w-xl mx-auto p-8 text-center space-y-4">
+          <div className="text-4xl">✅</div>
+          <h2 className="text-xl font-semibold text-slate-800">Import complete</h2>
+          <p className="text-slate-600">
+            <strong>{result.inserted}</strong> transaction{result.inserted === 1 ? '' : 's'} imported,{' '}
+            <strong>{result.skipped}</strong> duplicate{result.skipped === 1 ? '' : 's'} skipped.
+          </p>
+          <p className="text-sm text-slate-500">Your column mapping was saved — next time this card&apos;s statement imports in two clicks.</p>
+          <div className="flex justify-center gap-3 pt-2">
+            <button className="btn-secondary" onClick={reset}>Import another file</button>
+            <button className="btn-primary" onClick={onDone}>View transactions</button>
+          </div>
         </div>
+        <ImportHistory />
       </div>
     )
   }
@@ -247,14 +278,17 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
       {error && <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-4 py-3 text-sm">{error}</div>}
 
       {step === 0 && (
-        <div className="card-panel p-10 text-center space-y-4">
-          <div className="text-4xl">📥</div>
-          <h2 className="text-xl font-semibold text-slate-800">Import a card statement</h2>
-          <p className="text-slate-600">Choose the CSV or Excel file you downloaded from your card&apos;s website.</p>
-          <button className="btn-primary mx-auto" onClick={pickFile} disabled={busy}>
-            {busy ? 'Reading file…' : 'Choose file…'}
-          </button>
-        </div>
+        <>
+          <div className="card-panel p-10 text-center space-y-4">
+            <div className="text-4xl">📥</div>
+            <h2 className="text-xl font-semibold text-slate-800">Import a card statement</h2>
+            <p className="text-slate-600">Choose the CSV, Excel, or text PDF file you downloaded from your card&apos;s website.</p>
+            <button className="btn-primary mx-auto" onClick={pickFile} disabled={busy}>
+              {busy ? 'Reading file…' : 'Choose file…'}
+            </button>
+          </div>
+          <ImportHistory />
+        </>
       )}
 
       {step === 1 && parsed && (
@@ -291,8 +325,8 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
             </button>
           </div>
           <p className="text-xs text-slate-500">
-            Statements mix business and personal charges — the split is decided per transaction by your merchant rules,
-            not by the card.
+            Statements mix business and personal charges; rows without a type rule stay in All until a merchant rule or
+            manual review marks them Business or Personal.
           </p>
         </div>
       )}
@@ -401,17 +435,41 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
 
           {reviewCount > 0 && (
             <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2.5 text-sm">
-              <strong>{reviewCount}</strong> row{reviewCount === 1 ? '' : 's'} matched no rule and defaulted to{' '}
-              <em>business</em>. Toggle the ones that are personal, or click <strong>+ rule</strong> on a row so this
-              merchant classifies itself on every future import.
+              <strong>{reviewCount}</strong> row{reviewCount === 1 ? '' : 's'} matched no type rule. They appear in All
+              until you mark them Business or Personal, or create a rule for the merchant.
             </div>
           )}
 
-          {selected.size > 0 && (
-            <div className="flex items-center gap-3 rounded-lg bg-slate-50 border border-slate-200 px-4 py-2 text-sm">
-              <span className="text-slate-600">{selected.size} selected:</span>
-              <button className="btn-secondary !py-1" onClick={() => bulkSet('business')}>Mark business</button>
-              <button className="btn-secondary !py-1" onClick={() => bulkSet('personal')}>Mark personal</button>
+          {selectableIndexes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 border border-slate-200 px-4 py-2 text-sm">
+              <span className="text-slate-600">
+                {selectedImportableCount} of {selectableIndexes.length} selected
+              </span>
+              <button
+                className="btn-secondary !py-1"
+                onClick={() => toggleAllImportable(true)}
+                disabled={allSelectableSelected}
+              >
+                Select all
+              </button>
+              <button className="btn-secondary !py-1" onClick={clearSelection} disabled={selectedImportableCount === 0}>
+                Clear
+              </button>
+              <span className="h-5 w-px bg-slate-200" />
+              <button
+                className="btn-secondary !py-1"
+                onClick={() => bulkSet('business')}
+                disabled={selectedImportableCount === 0}
+              >
+                Mark business
+              </button>
+              <button
+                className="btn-secondary !py-1"
+                onClick={() => bulkSet('personal')}
+                disabled={selectedImportableCount === 0}
+              >
+                Mark personal
+              </button>
             </div>
           )}
 
@@ -419,7 +477,15 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
             <table className="text-sm w-full">
               <thead className="bg-slate-50 sticky top-0">
                 <tr>
-                  <th className="px-3 py-2 w-8"></th>
+                  <th className="px-3 py-2 w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all importable rows"
+                      checked={allSelectableSelected}
+                      onChange={(e) => toggleAllImportable(e.target.checked)}
+                      disabled={selectableIndexes.length === 0}
+                    />
+                  </th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600">Date</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-600">Description</th>
                   <th className="px-3 py-2 text-right font-medium text-slate-600">Amount</th>
@@ -441,6 +507,7 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
                         {!skippedRow && (
                           <input
                             type="checkbox"
+                            aria-label={`Select row ${row.index + 1}`}
                             checked={selected.has(row.index)}
                             onChange={(e) => {
                               const next = new Set(selected)
@@ -465,7 +532,7 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
                                 : () =>
                                     setTypeOverrides({
                                       ...typeOverrides,
-                                      [row.index]: effectiveType(row.index, row.expense_type) === 'business' ? 'personal' : 'business'
+                                      [row.index]: nextReviewedType(effectiveType(row.index, row.expense_type))
                                     })
                             }
                           />

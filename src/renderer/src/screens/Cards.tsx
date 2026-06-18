@@ -56,8 +56,8 @@ export default function Cards(): React.JSX.Element {
       <section className="card-panel p-6 space-y-4">
         <h2 className="font-semibold text-slate-800">Cards</h2>
         <p className="text-sm text-slate-500">
-          A card is just a source for a statement. Each statement mixes business and personal charges — the split is
-          decided by your rules, not the card.
+          A card is just a source for a statement. Each statement mixes business and personal charges; rows stay visible
+          in All until a rule or manual review marks them Business or Personal.
         </p>
         <div className="overflow-auto rounded-lg border border-slate-200">
           <table className="text-sm w-full">

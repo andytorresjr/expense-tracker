@@ -19,3 +19,27 @@
     @apply bg-white rounded-xl border border-slate-200 shadow-sm;
   }
 }
+
+/* Printable report: hidden on screen, and when printing it replaces the app
+   chrome. The visibility toggle keeps the rest of the layout out of the page
+   while letting only #print-root and its contents render. */
+#print-root {
+  display: none;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #print-root,
+  #print-root * {
+    visibility: visible;
+  }
+  #print-root {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+}

@@ -1,0 +1,52 @@
+Expense Tracker Changelog
+=========================
+
+Version 1.2.1 - 2026-06-18
+--------------------------
+- Repackaged so the installed app matches the finished export feature: exporting a PDF report now correctly offers the "PDF document" file type in the save dialog (the prior 1.2.0 installer predated this and showed "Excel workbook").
+
+Version 1.1.0 - 2026-06-16
+--------------------------
+- Added selectable-text PDF statement import using Mozilla PDF.js.
+- PDF imports now feed the existing card selection, column mapping, preview, rules, dedupe, commit, and import history flow.
+- Added clear errors for password-protected PDFs, scanned/image-only PDFs with no selectable text, and PDFs where no transaction table header can be found.
+- Added sanitized PDF fixtures and self-test coverage for PDF parsing, preview, rules, duplicate detection, and unsupported PDF cases.
+- Scanned/OCR and password-protected PDFs remain out of scope.
+
+Version 1.0.3 - 2026-06-16
+--------------------------
+- Corrected transaction type behavior: Business and Personal are the only transaction types.
+- Restored the header filter to Business | Personal | All.
+- Imported transactions with no matching type rule now remain unassigned and visible in All until reviewed.
+- Added Other as a normal spending category.
+- Added migration to convert accidental prior expense_type = 'other' rows back to unassigned.
+- Verified packaged migration behavior against a simulated prior database.
+
+Version 1.0.2 - 2026-06-16
+--------------------------
+- Fixed card deletion foreign-key errors.
+- Deleting a card now removes its transactions, import profiles, and import history in one database transaction.
+- Added self-test coverage for deleting a card after import history exists.
+
+Version 1.0.1 - 2026-06-15
+--------------------------
+- Added an attempted neutral Other transaction type for unmatched imports.
+- This behavior was later corrected in version 1.0.3 because Other belongs in categories, not transaction type.
+
+Version 1.0.0 - 2026-06-15
+--------------------------
+- Added Quick Categorize workflow with keyboard shortcuts.
+- Added transaction clearing by date range or all transactions.
+- Added Import Statement History and per-import deletion.
+- Added Excel header detection improvements for statements with issuer preambles.
+- Added backup and restore workflow.
+- Added Windows installer and portable build.
+- Updated distribution and handoff documentation.
+- Upgraded dependencies and verified zero npm audit vulnerabilities.
+
+Current Delivery Notes
+----------------------
+- Current recommended delivery ZIP: build a fresh dist\Expense Tracker 1.1.0 Delivery.zip after final packaged smoke testing.
+- Current installer: dist\Expense Tracker Setup 1.1.0.exe after running npm run dist.
+- The installer is unsigned, so Windows may show an Unknown Publisher warning.
+- Do not distribute earlier 1.0.1 or 1.0.2 builds.

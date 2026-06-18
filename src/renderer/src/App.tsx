@@ -23,7 +23,7 @@ interface GlobalFilterCtx {
   setExpenseType: (t: ExpenseTypeFilter) => void
 }
 
-const FilterContext = createContext<GlobalFilterCtx>({ expenseType: 'business', setExpenseType: () => {} })
+const FilterContext = createContext<GlobalFilterCtx>({ expenseType: 'all', setExpenseType: () => {} })
 export const useGlobalFilter = (): GlobalFilterCtx => useContext(FilterContext)
 
 const TABS: { id: ExpenseTypeFilter; label: string }[] = [
@@ -32,11 +32,15 @@ const TABS: { id: ExpenseTypeFilter; label: string }[] = [
   { id: 'all', label: 'All' }
 ]
 
+const isExpenseTypeFilter = (value: string | null): value is ExpenseTypeFilter =>
+  value === 'business' || value === 'personal' || value === 'all'
+
 export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>('import')
-  const [expenseType, setExpenseTypeState] = useState<ExpenseTypeFilter>(
-    () => (localStorage.getItem('expenseTypeFilter') as ExpenseTypeFilter) || 'business'
-  )
+  const [expenseType, setExpenseTypeState] = useState<ExpenseTypeFilter>(() => {
+    const stored = localStorage.getItem('expenseTypeFilter')
+    return isExpenseTypeFilter(stored) ? stored : 'all'
+  })
   const setExpenseType = (t: ExpenseTypeFilter): void => {
     localStorage.setItem('expenseTypeFilter', t)
     setExpenseTypeState(t)
@@ -66,7 +70,7 @@ export default function App(): React.JSX.Element {
         <div className="flex-1 flex flex-col min-w-0">
           <header className="h-16 shrink-0 bg-white border-b border-slate-200 flex items-center justify-between px-6">
             <h1 className="text-lg font-semibold text-slate-800">{NAV.find((n) => n.id === screen)?.label}</h1>
-            <div className="flex rounded-lg border border-slate-300 overflow-hidden" title="Switch between business and personal reporting">
+            <div className="flex rounded-lg border border-slate-300 overflow-hidden" title="Switch reporting view">
               {TABS.map((tab) => (
                 <button
                   key={tab.id}

@@ -6,6 +6,9 @@ import type {
   ColumnMapping,
   CommitRow,
   ExpenseType,
+  ExportFormat,
+  ExportResult,
+  ImportBatch,
   ImportPreview,
   ImportProfile,
   ImportResult,
@@ -13,6 +16,8 @@ import type {
   Kpis,
   KpiFilters,
   ParsedFile,
+  TransactionClearRequest,
+  TransactionDeleteResult,
   Txn,
   TxnFilters,
   TxnPage
@@ -39,6 +44,7 @@ export const api = {
     list: () => call<Category[]>('categories.list'),
     create: (name: string, color: string | null) => call<Category>('categories.create', { name, color }),
     update: (id: number, name: string, color: string | null) => call<Category>('categories.update', { id, name, color }),
+    setHotkey: (id: number, hotkey: string | null) => call<Category>('categories.setHotkey', { id, hotkey }),
     remove: (id: number) => call<boolean>('categories.delete', { id })
   },
   rules: {
@@ -56,17 +62,25 @@ export const api = {
   },
   transactions: {
     list: (filters: TxnFilters) => call<TxnPage>('transactions.list', filters),
-    update: (id: number, fields: { category_id?: number | null; expense_type?: ExpenseType }) =>
+    categorizeQueue: () => call<Txn[]>('transactions.categorizeQueue'),
+    update: (id: number, fields: { category_id?: number | null; expense_type?: ExpenseType | null }) =>
       call<Txn>('transactions.update', { id, ...fields }),
-    bulkUpdate: (ids: number[], fields: { category_id?: number | null; expense_type?: ExpenseType }) =>
-      call<number>('transactions.bulkUpdate', { ids, ...fields })
+    bulkUpdate: (ids: number[], fields: { category_id?: number | null; expense_type?: ExpenseType | null }) =>
+      call<number>('transactions.bulkUpdate', { ids, ...fields }),
+    clear: (request: TransactionClearRequest) => call<TransactionDeleteResult>('transactions.clear', request),
+    exportRows: (filters: TxnFilters) => call<Txn[]>('transactions.exportRows', filters),
+    export: (filters: TxnFilters, format: ExportFormat) =>
+      call<ExportResult | null>('transactions.export', { filters, format }),
+    exportPdf: (filters: TxnFilters) => call<ExportResult | null>('transactions.export', { filters, format: 'pdf' })
   },
   import: {
     pickFile: () => call<ParsedFile | null>('import.pickFile'),
     preview: (cardId: number, rows: Record<string, string>[], mapping: ColumnMapping) =>
       call<ImportPreview>('import.preview', { cardId, rows, mapping }),
     commit: (cardId: number, filename: string, rows: CommitRow[]) =>
-      call<ImportResult>('import.commit', { cardId, filename, rows })
+      call<ImportResult>('import.commit', { cardId, filename, rows }),
+    batches: () => call<ImportBatch[]>('import.batches'),
+    deleteBatch: (id: number) => call<TransactionDeleteResult>('import.deleteBatch', { id })
   },
   dashboard: {
     getKpis: (filters: KpiFilters) => call<Kpis>('dashboard.getKpis', filters)

@@ -1,20 +1,55 @@
 import { app, dialog, ipcMain, BrowserWindow } from 'electron'
-import { copyFileSync } from 'fs'
+import { copyFileSync, writeFileSync } from 'fs'
 import { basename } from 'path'
 import type Database from 'better-sqlite3'
 import { getDb, closeDb, initDb } from './db'
 import { buildPreview, commitImport, parseFile } from './importer'
 import { rerunRules } from './rules'
+import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
+import { appendWhere, buildTxnWhere, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
+import { buildCsv, buildExportFileName, buildXlsx } from './export'
 import type {
   Card,
+  Category,
   ColumnMapping,
   CommitRow,
   ExpenseType,
+  ExportFormat,
+  ExportResult,
   IpcResult,
   KpiFilters,
   Kpis,
+  TransactionClearRequest,
   TxnFilters
 } from '@shared/types'
+
+const RESERVED_HOTKEYS = new Set(['b', 'p', 'r'])
+const INCOME_CATEGORY_SQL = "lower(COALESCE(c.name, '')) = 'income'"
+const REPORTABLE_SPEND_CATEGORY_SQL = "lower(COALESCE(c.name, '')) NOT IN ('income', 'transers', 'transfers')"
+
+function normalizeCategoryHotkey(raw: string | null | undefined): string | null {
+  const value = (raw ?? '').trim().toLowerCase()
+  if (!value) return null
+  if (!/^[a-z0-9]$/.test(value)) throw new Error('Use one letter or number for a category hotkey.')
+  if (RESERVED_HOTKEYS.has(value)) throw new Error('B, P, and R are reserved for Quick Categorize controls.')
+  return value
+}
+
+function setCategoryHotkey(db: Database.Database, id: number, rawHotkey: string | null): Category {
+  const category = db.prepare('SELECT * FROM categories WHERE id = ? AND is_archived = 0').get(id) as Category | undefined
+  if (!category) throw new Error('Category not found.')
+
+  const hotkey = normalizeCategoryHotkey(rawHotkey)
+  if (hotkey) {
+    const existing = db
+      .prepare('SELECT name FROM categories WHERE lower(hotkey) = ? AND id <> ? AND is_archived = 0')
+      .get(hotkey, id) as { name: string } | undefined
+    if (existing) throw new Error(`Hotkey ${hotkey.toUpperCase()} is already assigned to ${existing.name}.`)
+  }
+
+  db.prepare('UPDATE categories SET hotkey = ? WHERE id = ?').run(hotkey, id)
+  return db.prepare('SELECT * FROM categories WHERE id = ?').get(id) as Category
+}
 
 function handle<T>(channel: string, fn: (payload: never) => T | Promise<T>): void {
   ipcMain.handle(channel, async (_event, payload): Promise<IpcResult<T>> => {
@@ -28,43 +63,22 @@ function handle<T>(channel: string, fn: (payload: never) => T | Promise<T>): voi
   })
 }
 
-function buildTxnWhere(filters: TxnFilters): { where: string; params: Record<string, unknown> } {
-  const clauses: string[] = []
-  const params: Record<string, unknown> = {}
-  if (filters.expenseType && filters.expenseType !== 'all') {
-    clauses.push('t.expense_type = @expenseType')
-    params.expenseType = filters.expenseType
-  }
-  if (filters.cardId) {
-    clauses.push('t.card_id = @cardId')
-    params.cardId = filters.cardId
-  }
-  if (filters.categoryId === 'uncategorized') {
-    clauses.push('t.category_id IS NULL')
-  } else if (filters.categoryId) {
-    clauses.push('t.category_id = @categoryId')
-    params.categoryId = filters.categoryId
-  }
-  if (filters.search) {
-    clauses.push('t.description LIKE @search')
-    params.search = `%${filters.search}%`
-  }
-  if (filters.dateFrom) {
-    clauses.push('t.txn_date >= @dateFrom')
-    params.dateFrom = filters.dateFrom
-  }
-  if (filters.dateTo) {
-    clauses.push('t.txn_date <= @dateTo')
-    params.dateTo = filters.dateTo
-  }
-  return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
-}
-
 function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
   const { where, params } = buildTxnWhere(filters)
+  const spendWhere = appendWhere(where, REPORTABLE_SPEND_CATEGORY_SQL)
+  const incomeWhere = appendWhere(where, INCOME_CATEGORY_SQL)
 
   const totalSpend =
-    (db.prepare(`SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t ${where}`).get(params) as {
+    (db.prepare(`SELECT COALESCE(SUM(t.amount), 0) AS total
+                 FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+                 ${spendWhere}`).get(params) as {
+      total: number
+    }).total
+
+  const totalIncome =
+    (db.prepare(`SELECT COALESCE(SUM(ABS(t.amount)), 0) AS total
+                 FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+                 ${incomeWhere}`).get(params) as {
       total: number
     }).total
 
@@ -75,8 +89,18 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
   const prevFrom = new Date(from.getTime() - spanMs).toISOString().slice(0, 10)
   const prevTo = new Date(from.getTime() - 86400000).toISOString().slice(0, 10)
   const prev = buildTxnWhere({ ...filters, dateFrom: prevFrom, dateTo: prevTo })
+  const prevSpendWhere = appendWhere(prev.where, REPORTABLE_SPEND_CATEGORY_SQL)
+  const prevIncomeWhere = appendWhere(prev.where, INCOME_CATEGORY_SQL)
   const prevPeriodSpend =
-    (db.prepare(`SELECT COALESCE(SUM(t.amount), 0) AS total FROM transactions t ${prev.where}`).get(prev.params) as {
+    (db.prepare(`SELECT COALESCE(SUM(t.amount), 0) AS total
+                 FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+                 ${prevSpendWhere}`).get(prev.params) as {
+      total: number
+    }).total
+  const prevPeriodIncome =
+    (db.prepare(`SELECT COALESCE(SUM(ABS(t.amount)), 0) AS total
+                 FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+                 ${prevIncomeWhere}`).get(prev.params) as {
       total: number
     }).total
 
@@ -84,26 +108,28 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
     .prepare(
       `SELECT COALESCE(c.name, 'Uncategorized') AS category, c.color, SUM(t.amount) AS total
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       ${where} GROUP BY t.category_id ORDER BY total DESC`
+       ${spendWhere} GROUP BY t.category_id HAVING SUM(t.amount) > 0 ORDER BY total DESC`
     )
     .all(params) as Kpis['byCategory']
 
   const monthlyTrend = db
     .prepare(
       `SELECT strftime('%Y-%m', t.txn_date) AS month, SUM(t.amount) AS total
-       FROM transactions t ${where} GROUP BY month ORDER BY month ASC`
+       FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+       ${spendWhere} GROUP BY month ORDER BY month ASC`
     )
     .all(params) as Kpis['monthlyTrend']
 
   const topVendors = db
     .prepare(
       `SELECT t.description AS vendor, SUM(t.amount) AS total, COUNT(*) AS count
-       FROM transactions t ${where} GROUP BY UPPER(t.description) ORDER BY total DESC LIMIT 10`
+       FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+       ${spendWhere} GROUP BY UPPER(t.description) HAVING SUM(t.amount) > 0 ORDER BY total DESC LIMIT 10`
     )
     .all(params) as Kpis['topVendors']
 
   let budgetVsActual: Kpis['budgetVsActual'] = []
-  if (filters.expenseType !== 'all') {
+  if (filters.expenseType === 'business' || filters.expenseType === 'personal') {
     budgetVsActual = db
       .prepare(
         `SELECT c.name AS category, b.monthly_limit AS "limit",
@@ -112,7 +138,7 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
                             AND t.txn_date >= @dateFrom AND t.txn_date <= @dateTo
                             ${filters.cardId ? 'AND t.card_id = @cardId' : ''}), 0) AS actual
          FROM budgets b JOIN categories c ON c.id = b.category_id
-         WHERE b.expense_type = @expenseType ORDER BY c.name`
+         WHERE b.expense_type = @expenseType AND lower(c.name) NOT IN ('income', 'transers', 'transfers') ORDER BY c.name`
       )
       .all(params) as Kpis['budgetVsActual']
   }
@@ -122,15 +148,25 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
       params
     ) as { n: number }).n
 
-  return { totalSpend, prevPeriodSpend, byCategory, monthlyTrend, topVendors, budgetVsActual, uncategorizedCount }
+  return {
+    totalSpend,
+    totalIncome,
+    prevPeriodSpend,
+    prevPeriodIncome,
+    byCategory,
+    monthlyTrend,
+    topVendors,
+    budgetVsActual,
+    uncategorizedCount
+  }
 }
 
 export function registerIpcHandlers(): void {
   // ---- cards ----
   handle('cards.list', () => getDb().prepare('SELECT * FROM cards ORDER BY name').all())
   handle('cards.create', (p: { name: string }) => {
-    // No per-card expense type: statements mix both, so the column keeps its DB default
-    // and merchant rules do the business/personal split. See importer FALLBACK_EXPENSE_TYPE.
+    // No per-card expense type: statements mix both, so merchant rules or review
+    // do the business/personal split. Unmatched rows import with no type set.
     const result = getDb().prepare('INSERT INTO cards (name) VALUES (?)').run(p.name.trim())
     return getDb().prepare('SELECT * FROM cards WHERE id = ?').get(result.lastInsertRowid)
   })
@@ -139,7 +175,7 @@ export function registerIpcHandlers(): void {
     return getDb().prepare('SELECT * FROM cards WHERE id = ?').get(p.id)
   })
   handle('cards.delete', (p: { id: number }) => {
-    getDb().prepare('DELETE FROM cards WHERE id = ?').run(p.id)
+    deleteCard(getDb(), p.id)
     return true
   })
 
@@ -163,13 +199,14 @@ export function registerIpcHandlers(): void {
   // ---- categories ----
   handle('categories.list', () => getDb().prepare('SELECT * FROM categories WHERE is_archived = 0 ORDER BY name').all())
   handle('categories.create', (p: { name: string; color: string | null }) => {
-    const result = getDb().prepare('INSERT INTO categories (name, color) VALUES (?, ?)').run(p.name.trim(), p.color)
+    const result = getDb().prepare('INSERT INTO categories (name, color, hotkey) VALUES (?, ?, NULL)').run(p.name.trim(), p.color)
     return getDb().prepare('SELECT * FROM categories WHERE id = ?').get(result.lastInsertRowid)
   })
   handle('categories.update', (p: { id: number; name: string; color: string | null }) => {
     getDb().prepare('UPDATE categories SET name = ?, color = ? WHERE id = ?').run(p.name.trim(), p.color, p.id)
     return getDb().prepare('SELECT * FROM categories WHERE id = ?').get(p.id)
   })
+  handle('categories.setHotkey', (p: { id: number; hotkey: string | null }) => setCategoryHotkey(getDb(), p.id, p.hotkey))
   handle('categories.delete', (p: { id: number }) => {
     getDb().prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(p.id)
     return true
@@ -179,7 +216,13 @@ export function registerIpcHandlers(): void {
   handle('rules.list', () => getDb().prepare('SELECT * FROM category_rules ORDER BY priority DESC, id').all())
   handle(
     'rules.create',
-    (p: { category_id: number | null; expense_type: ExpenseType | null; match_type: string; pattern: string; priority: number }) => {
+    (p: {
+      category_id: number | null
+      expense_type: ExpenseType | null
+      match_type: string
+      pattern: string
+      priority: number
+    }) => {
       const result = getDb()
         .prepare(
           'INSERT INTO category_rules (category_id, expense_type, match_type, pattern, priority) VALUES (?, ?, ?, ?, ?)'
@@ -190,7 +233,14 @@ export function registerIpcHandlers(): void {
   )
   handle(
     'rules.update',
-    (p: { id: number; category_id: number | null; expense_type: ExpenseType | null; match_type: string; pattern: string; priority: number }) => {
+    (p: {
+      id: number
+      category_id: number | null
+      expense_type: ExpenseType | null
+      match_type: string
+      pattern: string
+      priority: number
+    }) => {
       getDb()
         .prepare(
           'UPDATE category_rules SET category_id = ?, expense_type = ?, match_type = ?, pattern = ?, priority = ? WHERE id = ?'
@@ -225,7 +275,7 @@ export function registerIpcHandlers(): void {
   handle('transactions.list', (filters: TxnFilters) => {
     const db = getDb()
     const { where, params } = buildTxnWhere(filters)
-    const sortBy = ['txn_date', 'amount', 'description'].includes(filters.sortBy ?? '') ? filters.sortBy : 'txn_date'
+    const sortBy = filters.sortBy && filters.sortBy in TXN_SORT_EXPRESSIONS ? filters.sortBy : 'txn_date'
     const sortDir = filters.sortDir === 'asc' ? 'ASC' : 'DESC'
     const pageSize = Math.min(filters.pageSize ?? 50, 500)
     const offset = (filters.page ?? 0) * pageSize
@@ -235,13 +285,13 @@ export function registerIpcHandlers(): void {
          FROM transactions t
          JOIN cards ca ON ca.id = t.card_id
          LEFT JOIN categories c ON c.id = t.category_id
-         ${where} ORDER BY t.${sortBy} ${sortDir}, t.id DESC LIMIT ${pageSize} OFFSET ${offset}`
+         ${where} ORDER BY ${TXN_SORT_EXPRESSIONS[sortBy]} ${sortDir}, t.id DESC LIMIT ${pageSize} OFFSET ${offset}`
       )
       .all(params)
     const total = (db.prepare(`SELECT COUNT(*) AS n FROM transactions t ${where}`).get(params) as { n: number }).n
     return { rows, total }
   })
-  handle('transactions.update', (p: { id: number; category_id?: number | null; expense_type?: ExpenseType }) => {
+  handle('transactions.update', (p: { id: number; category_id?: number | null; expense_type?: ExpenseType | null }) => {
     const db = getDb()
     if (p.category_id !== undefined) {
       db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?').run(p.category_id, p.id)
@@ -251,7 +301,7 @@ export function registerIpcHandlers(): void {
     }
     return db.prepare('SELECT * FROM transactions WHERE id = ?').get(p.id)
   })
-  handle('transactions.bulkUpdate', (p: { ids: number[]; category_id?: number | null; expense_type?: ExpenseType }) => {
+  handle('transactions.bulkUpdate', (p: { ids: number[]; category_id?: number | null; expense_type?: ExpenseType | null }) => {
     const db = getDb()
     const updCat = db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?')
     const updType = db.prepare('UPDATE transactions SET expense_type = ?, type_locked = 1 WHERE id = ?')
@@ -264,17 +314,66 @@ export function registerIpcHandlers(): void {
     run()
     return p.ids.length
   })
+  handle('transactions.clear', (p: TransactionClearRequest) => ({ deleted: clearTransactions(getDb(), p) }))
+  // Quick-categorize queue: every transaction, uncategorized first, newest first
+  // within each group. Ignores the global business/personal filter on purpose —
+  // it is a one-pass cleanup over the whole dataset.
+  handle('transactions.categorizeQueue', () =>
+    getDb()
+      .prepare(
+        `SELECT t.*, ca.name AS card_name, c.name AS category_name
+         FROM transactions t
+         JOIN cards ca ON ca.id = t.card_id
+         LEFT JOIN categories c ON c.id = t.category_id
+         ORDER BY (t.category_id IS NULL) DESC, t.txn_date DESC, t.id DESC`
+      )
+      .all()
+  )
+  // Full filtered row set for the printable report (rendered in the renderer).
+  handle('transactions.exportRows', (filters: TxnFilters) => fetchTransactionsForExport(getDb(), filters))
+  // Write the filtered rows to a CSV, Excel file, or mounted PDF report the user chooses via save dialog.
+  handle('transactions.export', async (p: { filters: TxnFilters; format: ExportFormat }) => {
+    const rows = fetchTransactionsForExport(getDb(), p.filters)
+    if (rows.length === 0) throw new Error('No transactions match the current filters — nothing to export.')
+    const win = BrowserWindow.getFocusedWindow()
+    if (p.format === 'pdf' && !win) throw new Error('No active window is available for PDF export.')
+    const result = await dialog.showSaveDialog(win ?? new BrowserWindow({ show: false }), {
+      title: 'Export transactions',
+      defaultPath: buildExportFileName(p.filters, rows, p.format),
+      filters:
+        p.format === 'csv'
+          ? [{ name: 'CSV (comma-separated)', extensions: ['csv'] }]
+          : p.format === 'xlsx'
+            ? [{ name: 'Excel workbook', extensions: ['xlsx'] }]
+            : [{ name: 'PDF document', extensions: ['pdf'] }]
+    })
+    if (result.canceled || !result.filePath) return null
+    if (p.format === 'csv') writeFileSync(result.filePath, buildCsv(rows), 'utf8')
+    else if (p.format === 'xlsx') writeFileSync(result.filePath, buildXlsx(rows))
+    else {
+      const pdf = await win!.webContents.printToPDF({
+        printBackground: true,
+        pageSize: 'Letter',
+        margins: { marginType: 'default' }
+      })
+      writeFileSync(result.filePath, pdf)
+    }
+    return { path: result.filePath, count: rows.length } satisfies ExportResult
+  })
 
   // ---- import ----
   handle('import.pickFile', async () => {
     const win = BrowserWindow.getFocusedWindow()
     const result = await dialog.showOpenDialog(win ?? new BrowserWindow({ show: false }), {
       title: 'Choose a card statement',
-      filters: [{ name: 'Statements', extensions: ['csv', 'xlsx', 'xls'] }],
+      filters: [
+        { name: 'CSV, Excel, or PDF statements', extensions: ['csv', 'xlsx', 'xls', 'pdf'] },
+        { name: 'All files', extensions: ['*'] }
+      ],
       properties: ['openFile']
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return parseFile(result.filePaths[0])
+    return await parseFile(result.filePaths[0])
   })
   handle('import.preview', (p: { cardId: number; rows: Record<string, string>[]; mapping: ColumnMapping }) => {
     const db = getDb()
@@ -288,11 +387,16 @@ export function registerIpcHandlers(): void {
   handle('import.batches', () =>
     getDb()
       .prepare(
-        `SELECT b.*, c.name AS card_name FROM import_batches b JOIN cards c ON c.id = b.card_id
-         ORDER BY b.imported_at DESC LIMIT 20`
+        `SELECT b.*, c.name AS card_name,
+                (SELECT COUNT(*) FROM transactions t WHERE t.import_batch_id = b.id) AS transaction_count
+         FROM import_batches b JOIN cards c ON c.id = b.card_id
+         ORDER BY b.imported_at DESC, b.id DESC`
       )
       .all()
   )
+  handle('import.deleteBatch', (p: { id: number }) => ({
+    deleted: deleteImportBatch(getDb(), p.id)
+  }))
 
   // ---- dashboard ----
   handle('dashboard.getKpis', (filters: KpiFilters) => getKpis(getDb(), filters))

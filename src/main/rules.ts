@@ -51,7 +51,7 @@ export function rerunRules(db: Database.Database): { categorized: number; retype
     .prepare(
       'SELECT id, description, expense_type, category_id FROM transactions WHERE category_locked = 0 OR type_locked = 0'
     )
-    .all() as { id: number; description: string; expense_type: ExpenseType; category_id: number | null }[]
+    .all() as { id: number; description: string; expense_type: ExpenseType | null; category_id: number | null }[]
   const lockFlags = db
     .prepare('SELECT id, category_locked, type_locked FROM transactions')
     .all() as { id: number; category_locked: 0 | 1; type_locked: 0 | 1 }[]

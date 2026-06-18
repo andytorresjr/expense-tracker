@@ -79,6 +79,8 @@ export default function Dashboard(): React.JSX.Element {
     if (!kpis || kpis.prevPeriodSpend === 0) return null
     return ((kpis.totalSpend - kpis.prevPeriodSpend) / kpis.prevPeriodSpend) * 100
   }, [kpis])
+  const netAfterIncome = kpis ? kpis.totalSpend - kpis.totalIncome : 0
+  const categoryBarHeight = kpis ? Math.max(260, Math.min(520, kpis.byCategory.length * 42 + 56)) : 260
 
   return (
     <div className="space-y-5">
@@ -109,7 +111,7 @@ export default function Dashboard(): React.JSX.Element {
 
       {kpis && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
             <StatCard title="Total spend">
               <div className="text-3xl font-semibold text-slate-800">{fmtMoney(kpis.totalSpend)}</div>
               {pctChange !== null ? (
@@ -119,6 +121,16 @@ export default function Dashboard(): React.JSX.Element {
               ) : (
                 <div className="text-sm mt-1 text-slate-400">No comparable prior period</div>
               )}
+            </StatCard>
+            <StatCard title="Income">
+              <div className="text-3xl font-semibold text-green-700">{fmtMoney(kpis.totalIncome)}</div>
+              <div className="text-sm mt-1 text-slate-400">from Income category</div>
+            </StatCard>
+            <StatCard title="Net after income">
+              <div className={`text-3xl font-semibold ${netAfterIncome > 0 ? 'text-slate-800' : 'text-green-700'}`}>
+                {fmtMoney(netAfterIncome)}
+              </div>
+              <div className="text-sm mt-1 text-slate-400">spend minus income</div>
             </StatCard>
             <StatCard title="Uncategorized">
               <div className="text-3xl font-semibold text-slate-800">{kpis.uncategorizedCount}</div>
@@ -156,6 +168,28 @@ export default function Dashboard(): React.JSX.Element {
               )}
             </StatCard>
 
+            <StatCard title="Category spending">
+              {kpis.byCategory.length === 0 ? (
+                <p className="text-sm text-slate-400 py-12 text-center">No spending in this range.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height={categoryBarHeight}>
+                  <BarChart data={kpis.byCategory} layout="vertical" margin={{ top: 4, right: 18, left: 12, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" fontSize={12} tickFormatter={(v) => `$${v}`} />
+                    <YAxis type="category" dataKey="category" width={130} fontSize={12} tickLine={false} />
+                    <Tooltip formatter={(v) => fmtMoney(Number(v))} />
+                    <Bar dataKey="total" radius={[0, 4, 4, 0]}>
+                      {kpis.byCategory.map((entry, i) => (
+                        <Cell key={i} fill={entry.color ?? PALETTE[i % PALETTE.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </StatCard>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <StatCard title="Monthly trend">
               {kpis.monthlyTrend.length === 0 ? (
                 <p className="text-sm text-slate-400 py-12 text-center">No spending in this range.</p>
@@ -171,9 +205,7 @@ export default function Dashboard(): React.JSX.Element {
                 </ResponsiveContainer>
               )}
             </StatCard>
-          </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <StatCard title="Top vendors">
               <table className="text-sm w-full">
                 <tbody>

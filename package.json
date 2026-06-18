@@ -1,9 +1,12 @@
 {
   "name": "expense-tracker",
-  "version": "0.1.0",
+  "version": "1.2.1",
   "description": "Local expense tracker for company card statements. Fully offline.",
   "main": "./out/main/index.js",
-  "author": "UNIMEX",
+  "author": {
+    "name": "UNIMEX"
+  },
+  "copyright": "Copyright © 2026 UNIMEX",
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
@@ -20,15 +23,29 @@
     "appId": "com.unimex.expense-tracker",
     "productName": "Expense Tracker",
     "npmRebuild": false,
-    "files": ["out/**"],
+    "files": [
+      "out/**"
+    ],
+    "nsis": {
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Expense Tracker"
+    },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     }
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
     "papaparse": "^5.5.3",
-    "xlsx": "^0.18.5"
+    "pdfjs-dist": "5.4.296",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "overrides": {
+    "esbuild": "0.28.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

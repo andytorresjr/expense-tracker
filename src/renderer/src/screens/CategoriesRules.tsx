@@ -9,6 +9,66 @@ const MATCH_LABEL: Record<CategoryRule['match_type'], string> = {
   regex: 'regex'
 }
 
+const RESERVED_HOTKEYS = new Set(['b', 'p', 'r'])
+const DEFAULT_CATEGORY_COLOR = '#64748b'
+const AUTO_COLOR_PALETTE = [
+  '#ef4444',
+  '#f97316',
+  '#f59e0b',
+  '#eab308',
+  '#84cc16',
+  '#22c55e',
+  '#10b981',
+  '#14b8a6',
+  '#06b6d4',
+  '#0ea5e9',
+  '#3b82f6',
+  '#6366f1',
+  '#8b5cf6',
+  '#a855f7',
+  '#d946ef',
+  '#ec4899',
+  '#f43f5e',
+  '#64748b'
+]
+
+function normalizeHotkey(raw: string): string | null {
+  const value = raw.trim().toLowerCase()
+  if (!value) return null
+  return value.slice(0, 1)
+}
+
+function formatHotkey(value: string | null): string {
+  return value?.toUpperCase() ?? ''
+}
+
+function normalizeColor(value: string | null): string | null {
+  const color = value?.trim().toLowerCase() ?? ''
+  return /^#[0-9a-f]{6}$/.test(color) ? color : null
+}
+
+function colorForInput(value: string | null): string {
+  return normalizeColor(value) ?? DEFAULT_CATEGORY_COLOR
+}
+
+function randomHexColor(): string {
+  return `#${Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, '0')}`
+}
+
+function pickUnusedColor(categories: Category[]): string {
+  const used = new Set(categories.map((category) => normalizeColor(category.color)).filter((color): color is string => color !== null))
+  const available = AUTO_COLOR_PALETTE.filter((color) => !used.has(color))
+  if (available.length > 0) return available[Math.floor(Math.random() * available.length)]
+
+  for (let i = 0; i < 100; i++) {
+    const color = randomHexColor()
+    if (!used.has(color)) return color
+  }
+  return randomHexColor()
+}
+
 export default function CategoriesRules(): React.JSX.Element {
   const [categories, setCategories] = useState<Category[]>([])
   const [rules, setRules] = useState<CategoryRule[]>([])
@@ -18,7 +78,10 @@ export default function CategoriesRules(): React.JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
 
   const [newCatName, setNewCatName] = useState('')
-  const [newCatColor, setNewCatColor] = useState('#64748b')
+  const [newCatColor, setNewCatColor] = useState(DEFAULT_CATEGORY_COLOR)
+  const [categoryNameDrafts, setCategoryNameDrafts] = useState<Record<number, string>>({})
+  const [colorDrafts, setColorDrafts] = useState<Record<number, string>>({})
+  const [hotkeyDrafts, setHotkeyDrafts] = useState<Record<number, string>>({})
 
   const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null)
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null)
@@ -34,6 +97,12 @@ export default function CategoriesRules(): React.JSX.Element {
   }, [])
 
   useEffect(load, [load])
+
+  useEffect(() => {
+    setCategoryNameDrafts(Object.fromEntries(categories.map((category) => [category.id, category.name])))
+    setHotkeyDrafts(Object.fromEntries(categories.map((category) => [category.id, formatHotkey(category.hotkey)])))
+    setColorDrafts(Object.fromEntries(categories.map((category) => [category.id, colorForInput(category.color)])))
+  }, [categories])
 
   const run = async (fn: () => Promise<void>, msg?: string): Promise<void> => {
     setBusy(true)
@@ -66,6 +135,70 @@ export default function CategoriesRules(): React.JSX.Element {
       await api.categories.remove(c.id)
       load()
     })
+
+  const saveCategoryName = (category: Category, rawName = categoryNameDrafts[category.id] ?? category.name): Promise<void> => {
+    const name = rawName.trim()
+    if (name === category.name) {
+      setCategoryNameDrafts((drafts) => ({ ...drafts, [category.id]: category.name }))
+      return Promise.resolve()
+    }
+
+    return run(
+      async () => {
+        if (!name) throw new Error('Enter a category name.')
+        const duplicate = categories.find((c) => c.id !== category.id && c.name.trim().toLowerCase() === name.toLowerCase())
+        if (duplicate) throw new Error(`A category named ${name} already exists.`)
+
+        await api.categories.update(category.id, name, category.color)
+        load()
+      },
+      `${category.name} renamed to ${name}.`
+    )
+  }
+
+  const saveCategoryColor = (category: Category, color: string, msg?: string): Promise<void> => {
+    const normalized = normalizeColor(color)
+    if (!normalized) return Promise.resolve()
+    if (normalized === normalizeColor(category.color)) {
+      setColorDrafts((drafts) => ({ ...drafts, [category.id]: colorForInput(category.color) }))
+      return Promise.resolve()
+    }
+
+    setColorDrafts((drafts) => ({ ...drafts, [category.id]: normalized }))
+    return run(async () => {
+      await api.categories.update(category.id, category.name, normalized)
+      load()
+    }, msg)
+  }
+
+  const autoAssignCategoryColor = (category: Category): Promise<void> => {
+    const color = pickUnusedColor(categories)
+    return saveCategoryColor(category, color, `Auto color assigned to ${category.name}.`)
+  }
+
+  const saveHotkey = (category: Category): Promise<void> => {
+    const hotkey = normalizeHotkey(hotkeyDrafts[category.id] ?? '')
+    const current = category.hotkey?.toLowerCase() ?? null
+    if (hotkey === current) {
+      setHotkeyDrafts((drafts) => ({ ...drafts, [category.id]: formatHotkey(category.hotkey) }))
+      return Promise.resolve()
+    }
+
+    return run(
+      async () => {
+        if (hotkey !== null) {
+          if (!/^[a-z0-9]$/.test(hotkey)) throw new Error('Use one letter or number for a category hotkey.')
+          if (RESERVED_HOTKEYS.has(hotkey)) throw new Error('B, P, and R are reserved for Quick Categorize controls.')
+          const duplicate = categories.find((c) => c.id !== category.id && c.hotkey?.toLowerCase() === hotkey)
+          if (duplicate) throw new Error(`Hotkey ${hotkey.toUpperCase()} is already assigned to ${duplicate.name}.`)
+        }
+
+        await api.categories.setHotkey(category.id, hotkey)
+        load()
+      },
+      hotkey ? `Hotkey ${hotkey.toUpperCase()} assigned to ${category.name}.` : `Hotkey cleared for ${category.name}.`
+    )
+  }
 
   // ---- rules ----
   const openNewRule = (): void => {
@@ -142,8 +275,8 @@ export default function CategoriesRules(): React.JSX.Element {
           </button>
         </div>
         <p className="text-sm text-slate-500">
-          Rules split each statement into business vs. personal and assign categories automatically by matching the
-          merchant text. Higher priority wins when two rules match.
+          Rules mark matching merchants as Business or Personal and assign categories automatically. If no type rule
+          matches, imported transactions stay visible in All until reviewed.
         </p>
         <div className="overflow-auto rounded-lg border border-slate-200">
           <table className="text-sm w-full">
@@ -207,6 +340,8 @@ export default function CategoriesRules(): React.JSX.Element {
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-4 py-2 text-left font-medium text-slate-600">Category</th>
+                <th className="px-4 py-2 text-left font-medium text-slate-600">Color</th>
+                <th className="px-4 py-2 text-left font-medium text-slate-600">Hotkey</th>
                 <th className="px-4 py-2 text-right font-medium text-slate-600">Business budget / mo</th>
                 <th className="px-4 py-2 text-right font-medium text-slate-600">Personal budget / mo</th>
                 <th className="px-4 py-2"></th>
@@ -216,10 +351,69 @@ export default function CategoriesRules(): React.JSX.Element {
               {categories.map((c) => (
                 <tr key={c.id} className="border-t border-slate-100">
                   <td className="px-4 py-2">
-                    <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex items-center gap-2 w-full">
                       <span className="w-3 h-3 rounded-full" style={{ background: c.color ?? '#cbd5e1' }} />
-                      {c.name}
+                      <input
+                        className="input w-56 max-w-full"
+                        aria-label={`Name for ${c.name}`}
+                        value={categoryNameDrafts[c.id] ?? c.name}
+                        onChange={(e) => setCategoryNameDrafts((drafts) => ({ ...drafts, [c.id]: e.target.value }))}
+                        onBlur={(e) => saveCategoryName(c, e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur()
+                          if (e.key === 'Escape') {
+                            e.currentTarget.value = c.name
+                            setCategoryNameDrafts((drafts) => ({ ...drafts, [c.id]: c.name }))
+                            e.currentTarget.blur()
+                          }
+                        }}
+                        disabled={busy}
+                      />
                     </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        className="block w-12 h-9 rounded border border-slate-300"
+                        aria-label={`Color for ${c.name}`}
+                        value={colorDrafts[c.id] ?? colorForInput(c.color)}
+                        onChange={(e) => {
+                          setColorDrafts((drafts) => ({ ...drafts, [c.id]: e.target.value }))
+                          saveCategoryColor(c, e.target.value)
+                        }}
+                        disabled={busy}
+                      />
+                      <button
+                        className="btn-secondary !py-1 !px-2 text-xs"
+                        onClick={() => autoAssignCategoryColor(c)}
+                        disabled={busy}
+                        title="Pick an unused category color"
+                      >
+                        Auto
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2">
+                    <input
+                      className="input w-16 text-center uppercase"
+                      aria-label={`Hotkey for ${c.name}`}
+                      maxLength={1}
+                      placeholder="—"
+                      value={hotkeyDrafts[c.id] ?? ''}
+                      onChange={(e) => {
+                        const next = e.target.value.trim().slice(0, 1).toUpperCase()
+                        setHotkeyDrafts((drafts) => ({ ...drafts, [c.id]: next }))
+                      }}
+                      onBlur={() => saveHotkey(c)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                        if (e.key === 'Escape') {
+                          setHotkeyDrafts((drafts) => ({ ...drafts, [c.id]: formatHotkey(c.hotkey) }))
+                          e.currentTarget.blur()
+                        }
+                      }}
+                    />
                   </td>
                   {(['business', 'personal'] as ExpenseType[]).map((type) => (
                     <td key={type} className="px-4 py-2 text-right">
@@ -267,6 +461,14 @@ export default function CategoriesRules(): React.JSX.Element {
               onChange={(e) => setNewCatColor(e.target.value)}
             />
           </label>
+          <button
+            className="btn-secondary"
+            onClick={() => setNewCatColor(pickUnusedColor(categories))}
+            disabled={busy}
+            title="Pick an unused category color"
+          >
+            Auto color
+          </button>
           <button className="btn-secondary" onClick={addCategory} disabled={busy}>
             Add category
           </button>

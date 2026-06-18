@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
   color TEXT,
+  hotkey TEXT CHECK (hotkey IS NULL OR length(hotkey) = 1),
   is_archived INTEGER NOT NULL DEFAULT 0
 );
 
@@ -57,7 +58,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   txn_date TEXT NOT NULL,
   description TEXT NOT NULL,
   amount REAL NOT NULL,
-  expense_type TEXT NOT NULL CHECK (expense_type IN ('business','personal')),
+  expense_type TEXT CHECK (expense_type IN ('business','personal')),
   type_locked INTEGER NOT NULL DEFAULT 0,
   category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
   category_locked INTEGER NOT NULL DEFAULT 0,
@@ -90,14 +91,120 @@ const SEED_CATEGORIES: [string, string][] = [
   ['Utilities', '#10b981'],
   ['Professional Services', '#6366f1'],
   ['Shipping', '#f97316'],
+  ['Other', '#64748b'],
   ['Uncategorized', '#9ca3af']
 ]
+
+function tableSql(database: Database.Database, name: string): string {
+  const row = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
+    | { sql: string }
+    | undefined
+  return row?.sql ?? ''
+}
+
+function createTransactionIndexes(database: Database.Database): void {
+  database.exec(`
+CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date);
+CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category_id);
+CREATE INDEX IF NOT EXISTS idx_txn_card ON transactions(card_id);
+CREATE INDEX IF NOT EXISTS idx_txn_type ON transactions(expense_type);
+`)
+}
+
+function createCategoryIndexes(database: Database.Database): void {
+  database.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_hotkey_active ON categories(hotkey) WHERE hotkey IS NOT NULL AND is_archived = 0;
+`)
+}
+
+function ensureCategoryHotkeyColumn(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(categories)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'hotkey')) {
+    database.exec('ALTER TABLE categories ADD COLUMN hotkey TEXT')
+  }
+  createCategoryIndexes(database)
+}
+
+function ensureNullableTransactionType(database: Database.Database): void {
+  const sql = tableSql(database, 'transactions')
+  if (!sql.includes("'other'") && !sql.includes('expense_type TEXT NOT NULL')) return
+
+  const priorForeignKeys = database.pragma('foreign_keys', { simple: true }) as number
+  database.pragma('foreign_keys = OFF')
+  try {
+    const migrate = database.transaction(() => {
+      database.exec(`
+CREATE TABLE transactions_new (
+  id INTEGER PRIMARY KEY,
+  card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  txn_date TEXT NOT NULL,
+  description TEXT NOT NULL,
+  amount REAL NOT NULL,
+  expense_type TEXT CHECK (expense_type IN ('business','personal')),
+  type_locked INTEGER NOT NULL DEFAULT 0,
+  category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  category_locked INTEGER NOT NULL DEFAULT 0,
+  import_batch_id INTEGER REFERENCES import_batches(id) ON DELETE SET NULL,
+  dedupe_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(dedupe_hash)
+);
+
+INSERT INTO transactions_new (
+  id,
+  card_id,
+  txn_date,
+  description,
+  amount,
+  expense_type,
+  type_locked,
+  category_id,
+  category_locked,
+  import_batch_id,
+  dedupe_hash,
+  created_at
+)
+SELECT
+  id,
+  card_id,
+  txn_date,
+  description,
+  amount,
+  CASE WHEN expense_type = 'other' THEN NULL ELSE expense_type END,
+  type_locked,
+  category_id,
+  category_locked,
+  import_batch_id,
+  dedupe_hash,
+  created_at
+FROM transactions;
+
+DROP TABLE transactions;
+ALTER TABLE transactions_new RENAME TO transactions;
+`)
+    })
+    migrate()
+  } finally {
+    database.pragma(`foreign_keys = ${priorForeignKeys ? 'ON' : 'OFF'}`)
+  }
+  createTransactionIndexes(database)
+}
+
+function ensureSeedCategories(database: Database.Database): void {
+  const insert = database.prepare('INSERT OR IGNORE INTO categories (name, color) VALUES (?, ?)')
+  const seedMissing = database.transaction(() => {
+    for (const [name, color] of SEED_CATEGORIES) insert.run(name, color)
+  })
+  seedMissing()
+}
 
 export function initDb(dbPath: string): Database.Database {
   db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   db.exec(SCHEMA)
+  ensureNullableTransactionType(db)
+  ensureCategoryHotkeyColumn(db)
 
   const count = db.prepare('SELECT COUNT(*) AS n FROM categories').get() as { n: number }
   if (count.n === 0) {
@@ -107,6 +214,8 @@ export function initDb(dbPath: string): Database.Database {
     })
     seedAll()
   }
+  ensureSeedCategories(db)
+  createCategoryIndexes(db)
   return db
 }
 
