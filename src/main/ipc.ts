@@ -8,6 +8,7 @@ import { rerunRules } from './rules'
 import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
 import { appendWhere, buildTxnWhere, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
 import { buildCsv, buildExportFileName, buildXlsx } from './export'
+import { checkForUpdates } from './updater'
 import type {
   Card,
   Category,
@@ -431,4 +432,5 @@ export function registerIpcHandlers(): void {
 
   // app metadata
   handle('app.version', () => app.getVersion())
+  handle('updates.check', () => checkForUpdates(BrowserWindow.getFocusedWindow()))
 }

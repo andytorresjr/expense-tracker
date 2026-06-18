@@ -1,6 +1,11 @@
 Expense Tracker Changelog
 =========================
 
+Version 1.2.2 - 2026-06-18
+--------------------------
+- Added an in-app updater. Settings -> Updates -> "Check for updates" checks GitHub for a newer release and, only with your confirmation, downloads and installs it (then restarts). The app stays fully offline unless you click the button; no data is ever sent.
+- Note: auto-update works from this version forward. Installing 1.2.2 enables detection of 1.2.3 and later.
+
 Version 1.2.1 - 2026-06-18
 --------------------------
 - Repackaged so the installed app matches the finished export feature: exporting a PDF report now correctly offers the "PDF document" file type in the save dialog (the prior 1.2.0 installer predated this and showed "Excel workbook").

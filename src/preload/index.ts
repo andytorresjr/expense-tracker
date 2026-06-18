@@ -36,7 +36,8 @@ const CHANNELS = new Set([
   'db.getPath',
   'db.backup',
   'db.restore',
-  'app.version'
+  'app.version',
+  'updates.check'
 ])
 
 contextBridge.exposeInMainWorld('api', {

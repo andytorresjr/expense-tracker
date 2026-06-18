@@ -1,6 +1,6 @@
 {
   "name": "expense-tracker",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Local expense tracker for company card statements. Fully offline.",
   "main": "./out/main/index.js",
   "author": {
@@ -17,7 +17,8 @@
     "rebuild": "cd node_modules/better-sqlite3 && npx prebuild-install -r electron -t 41.7.2",
     "postinstall": "npm run rebuild",
     "selftest": "npm run build && electron . --selftest",
-    "dist": "electron-vite build && electron-builder --win"
+    "dist": "electron-vite build && electron-builder --win",
+    "release": "electron-vite build && electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.unimex.expense-tracker",
@@ -36,10 +37,18 @@
         "nsis",
         "portable"
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "andytorresjr",
+        "repo": "expense-tracker"
+      }
+    ]
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
+    "electron-updater": "^6.8.9",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "5.4.296",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"

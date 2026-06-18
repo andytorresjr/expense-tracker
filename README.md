@@ -20,6 +20,13 @@ Grab the latest installer from the **[Releases page »](https://github.com/andyt
 > Windows SmartScreen may warn that the app is from an unidentified publisher because the
 > build is not code-signed. Click **More info → Run anyway** to proceed.
 
+### Staying up to date
+
+From v1.2.2 on, the app can update itself. Open **Settings → Updates → Check for updates**: it
+checks GitHub for a newer release and, only if you confirm, downloads and installs it, then restarts.
+The app stays fully offline otherwise — the check is the one time it touches the network, and no data
+is ever sent.
+
 ---
 
 ## Features
