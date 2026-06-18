@@ -116,12 +116,29 @@ npm run dist:mac   # local build → dist/*.dmg and dist/*.zip
 npm run release:mac  # build + publish to GitHub Releases (needs GH_TOKEN)
 ```
 
+### macOS code signing & notarization
+
+Signing and notarization are **already configured** (hardened runtime, entitlements in
+`build/entitlements.mac.plist`, and `notarize: true` in `package.json`). They stay dormant until
+the signing credentials below are present — without them, electron-builder simply skips signing and
+notarization, so unsigned local builds still work. To produce a signed, notarized build, set these
+environment variables before `npm run release:mac` (from an Apple Developer account, $99/yr):
+
+```bash
+export CSC_LINK=/path/to/DeveloperIDApplication.p12   # or base64 of the cert
+export CSC_KEY_PASSWORD=...        # the .p12 password
+export APPLE_ID=you@example.com
+export APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx   # appleid.apple.com app password
+export APPLE_TEAM_ID=XXXXXXXXXX
+```
+
 Caveats for macOS distribution:
 
-- **Code signing + notarization** (a paid Apple Developer account) are required for users to open
-  the app without right-click → Open, and are also required for in-app auto-update to work
-  (macOS update installs must be signed). The `zip` target above is what the updater consumes.
+- A signed + notarized build is required for users to open the app without right-click → Open, and
+  for **in-app auto-update** to work (macOS update installs must be signed). The `zip` target is what
+  the updater consumes.
 - Without signing, the `.dmg` still runs after a one-time Gatekeeper override, but auto-update won't apply.
+- For an unsigned local test build, disable notarization with `npm run dist:mac -- -c.mac.notarize=false`.
 
 See [RELEASE.md](RELEASE.md) for the boss handoff, release checklist, Windows signing,
 upgrade behavior, and support procedure.
