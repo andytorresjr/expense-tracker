@@ -102,6 +102,27 @@ This runs `electron-vite build` then `electron-builder --win`, producing in `dis
 
 The app is fully offline — verify by disconnecting from the network and running it.
 
+---
+
+## Build for macOS
+
+The macOS targets are configured (`dmg` + `zip`, Apple Silicon and Intel), but a Mac build
+**must be produced on a Mac** — electron-builder cannot cross-compile macOS apps from Windows.
+On a macOS machine:
+
+```bash
+npm install        # rebuilds better-sqlite3 for macOS
+npm run dist:mac   # local build → dist/*.dmg and dist/*.zip
+npm run release:mac  # build + publish to GitHub Releases (needs GH_TOKEN)
+```
+
+Caveats for macOS distribution:
+
+- **Code signing + notarization** (a paid Apple Developer account) are required for users to open
+  the app without right-click → Open, and are also required for in-app auto-update to work
+  (macOS update installs must be signed). The `zip` target above is what the updater consumes.
+- Without signing, the `.dmg` still runs after a one-time Gatekeeper override, but auto-update won't apply.
+
 See [RELEASE.md](RELEASE.md) for the boss handoff, release checklist, Windows signing,
 upgrade behavior, and support procedure.
 

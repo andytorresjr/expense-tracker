@@ -18,7 +18,9 @@
     "postinstall": "npm run rebuild",
     "selftest": "npm run build && electron . --selftest",
     "dist": "electron-vite build && electron-builder --win",
-    "release": "electron-vite build && electron-builder --win --publish always"
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "release": "electron-vite build && electron-builder --win --publish always",
+    "release:mac": "electron-vite build && electron-builder --mac --publish always"
   },
   "build": {
     "appId": "com.unimex.expense-tracker",
@@ -36,6 +38,19 @@
       "target": [
         "nsis",
         "portable"
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
       ]
     },
     "publish": [
