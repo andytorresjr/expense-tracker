@@ -1,20 +1,22 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ExpenseTypeFilter } from '@shared/types'
 import ImportWizard from './screens/ImportWizard'
 import Transactions from './screens/Transactions'
 import CategoriesRules from './screens/CategoriesRules'
 import Dashboard from './screens/Dashboard'
-import Cards from './screens/Cards'
+import QuickReports from './screens/QuickReports'
 import Settings from './screens/Settings'
+import LockScreen from './components/LockScreen'
+import { getLockConfig } from './lock'
 
-type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'cards' | 'settings'
+type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'reports' | 'settings'
 
 const NAV: { id: Screen; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'transactions', label: 'Transactions', icon: '🧾' },
   { id: 'import', label: 'Import Statement', icon: '📥' },
   { id: 'categories', label: 'Categories & Rules', icon: '🏷️' },
-  { id: 'cards', label: 'Cards', icon: '💳' },
+  { id: 'reports', label: 'Quick Reports', icon: '⚡' },
   { id: 'settings', label: 'Settings', icon: '⚙️' }
 ]
 
@@ -25,6 +27,16 @@ interface GlobalFilterCtx {
 
 const FilterContext = createContext<GlobalFilterCtx>({ expenseType: 'all', setExpenseType: () => {} })
 export const useGlobalFilter = (): GlobalFilterCtx => useContext(FilterContext)
+
+interface LockCtx {
+  /** Lock the app immediately (Settings "Lock now" button). */
+  lockNow: () => void
+  /** Re-read lock settings after they change so the idle timer picks them up. */
+  refreshLockConfig: () => void
+}
+
+const LockContext = createContext<LockCtx>({ lockNow: () => {}, refreshLockConfig: () => {} })
+export const useLock = (): LockCtx => useContext(LockContext)
 
 const TABS: { id: ExpenseTypeFilter; label: string }[] = [
   { id: 'business', label: 'Business' },
@@ -46,7 +58,35 @@ export default function App(): React.JSX.Element {
     setExpenseTypeState(t)
   }
 
+  const [locked, setLocked] = useState(false)
+  const [lockConfig, setLockConfig] = useState(getLockConfig)
+  const refreshLockConfig = useCallback(() => setLockConfig(getLockConfig()), [])
+  const lockNow = useCallback(() => {
+    // Only lockable when a PIN exists, otherwise the lock screen can't be cleared.
+    if (getLockConfig().hasPin) setLocked(true)
+  }, [])
+
+  // Idle auto-lock: while enabled and unlocked, lock after timeoutMs of no input.
+  // Any activity resets the countdown. When locked, listeners are torn down (the
+  // overlay owns input) and re-armed on unlock.
+  useEffect(() => {
+    if (!lockConfig.enabled || locked) return
+    let timer: ReturnType<typeof setTimeout>
+    const reset = (): void => {
+      clearTimeout(timer)
+      timer = setTimeout(() => setLocked(true), lockConfig.timeoutMs)
+    }
+    const events = ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart', 'scroll']
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }))
+    reset()
+    return () => {
+      clearTimeout(timer)
+      events.forEach((e) => window.removeEventListener(e, reset))
+    }
+  }, [lockConfig.enabled, lockConfig.timeoutMs, locked])
+
   return (
+    <LockContext.Provider value={{ lockNow, refreshLockConfig }}>
     <FilterContext.Provider value={{ expenseType, setExpenseType }}>
       <div className="flex h-screen">
         <aside className="w-56 shrink-0 bg-slate-900 text-slate-200 flex flex-col">
@@ -96,11 +136,13 @@ export default function App(): React.JSX.Element {
             {screen === 'transactions' && <Transactions />}
             {screen === 'dashboard' && <Dashboard />}
             {screen === 'categories' && <CategoriesRules />}
-            {screen === 'cards' && <Cards />}
+            {screen === 'reports' && <QuickReports />}
             {screen === 'settings' && <Settings />}
           </main>
         </div>
       </div>
+      {locked && <LockScreen onUnlock={() => setLocked(false)} />}
     </FilterContext.Provider>
+    </LockContext.Provider>
   )
 }

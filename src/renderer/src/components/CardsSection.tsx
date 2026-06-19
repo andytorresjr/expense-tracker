@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Card } from '@shared/types'
 import { api } from '../api'
 
-export default function Cards(): React.JSX.Element {
+export default function CardsSection(): React.JSX.Element {
   const [cards, setCards] = useState<Card[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -50,7 +50,7 @@ export default function Cards(): React.JSX.Element {
     })
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4">
+    <>
       {error && <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-4 py-3 text-sm">{error}</div>}
 
       <section className="card-panel p-6 space-y-4">
@@ -128,6 +128,6 @@ export default function Cards(): React.JSX.Element {
           <button className="btn-secondary" onClick={add} disabled={busy}>Add card</button>
         </div>
       </section>
-    </div>
+    </>
   )
 }

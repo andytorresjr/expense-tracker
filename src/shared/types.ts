@@ -119,6 +119,10 @@ export interface ExportResult {
   count: number
 }
 
+export interface DashboardExportResult {
+  path: string
+}
+
 /** Outcome of a manual "Check for updates" run, surfaced in Settings. */
 export interface UpdateStatus {
   state: 'unsupported' | 'up-to-date' | 'available' | 'downloaded' | 'declined' | 'error'
@@ -153,6 +157,10 @@ export interface TxnFilters {
   expenseType?: ExpenseTypeFilter
   cardId?: number
   categoryId?: number | 'uncategorized'
+  /** Quick Reports: match any of several cards. Takes precedence over cardId. */
+  cardIds?: number[]
+  /** Quick Reports: match any of several categories ('uncategorized' = no category). Takes precedence over categoryId. */
+  categoryIds?: (number | 'uncategorized')[]
   search?: string
   dateFrom?: string
   dateTo?: string

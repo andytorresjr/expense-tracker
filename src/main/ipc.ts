@@ -7,13 +7,14 @@ import { buildPreview, commitImport, parseFile } from './importer'
 import { rerunRules } from './rules'
 import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
 import { appendWhere, buildTxnWhere, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
-import { buildCsv, buildExportFileName, buildXlsx } from './export'
+import { buildCsv, buildDashboardFileName, buildExportFileName, buildReportFileName, buildXlsx } from './export'
 import { checkForUpdates } from './updater'
 import type {
   Card,
   Category,
   ColumnMapping,
   CommitRow,
+  DashboardExportResult,
   ExpenseType,
   ExportFormat,
   ExportResult,
@@ -333,14 +334,16 @@ export function registerIpcHandlers(): void {
   // Full filtered row set for the printable report (rendered in the renderer).
   handle('transactions.exportRows', (filters: TxnFilters) => fetchTransactionsForExport(getDb(), filters))
   // Write the filtered rows to a CSV, Excel file, or mounted PDF report the user chooses via save dialog.
-  handle('transactions.export', async (p: { filters: TxnFilters; format: ExportFormat }) => {
+  handle('transactions.export', async (p: { filters: TxnFilters; format: ExportFormat; fileNameBase?: string }) => {
     const rows = fetchTransactionsForExport(getDb(), p.filters)
     if (rows.length === 0) throw new Error('No transactions match the current filters — nothing to export.')
     const win = BrowserWindow.getFocusedWindow()
     if (p.format === 'pdf' && !win) throw new Error('No active window is available for PDF export.')
     const result = await dialog.showSaveDialog(win ?? new BrowserWindow({ show: false }), {
       title: 'Export transactions',
-      defaultPath: buildExportFileName(p.filters, rows, p.format),
+      defaultPath: p.fileNameBase
+        ? buildReportFileName(p.fileNameBase, p.format)
+        : buildExportFileName(p.filters, rows, p.format),
       filters:
         p.format === 'csv'
           ? [{ name: 'CSV (comma-separated)', extensions: ['csv'] }]
@@ -401,6 +404,25 @@ export function registerIpcHandlers(): void {
 
   // ---- dashboard ----
   handle('dashboard.getKpis', (filters: KpiFilters) => getKpis(getDb(), filters))
+  // Save the dashboard as a PDF. The renderer mounts a printable #print-root view
+  // before invoking this; printToPDF captures it via the @media print rules.
+  handle('dashboard.exportPdf', async (p: { filters: KpiFilters }) => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) throw new Error('No active window is available for PDF export.')
+    const result = await dialog.showSaveDialog(win, {
+      title: 'Export dashboard',
+      defaultPath: buildDashboardFileName(p.filters),
+      filters: [{ name: 'PDF document', extensions: ['pdf'] }]
+    })
+    if (result.canceled || !result.filePath) return null
+    const pdf = await win.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'Letter',
+      margins: { marginType: 'default' }
+    })
+    writeFileSync(result.filePath, pdf)
+    return { path: result.filePath } satisfies DashboardExportResult
+  })
 
   // ---- db / settings ----
   handle('db.getPath', () => getDb().name)

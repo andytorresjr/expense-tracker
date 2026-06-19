@@ -17,11 +17,22 @@ export function buildTxnWhere(filters: TxnFilters): { where: string; params: Rec
     clauses.push('t.expense_type = @expenseType')
     params.expenseType = filters.expenseType
   }
-  if (filters.cardId) {
+  const cardIds = filters.cardIds?.filter((n): n is number => Number.isInteger(n))
+  if (cardIds && cardIds.length) {
+    // Safe to inline: filtered to integers above. better-sqlite3 can't bind an
+    // array to a single IN placeholder.
+    clauses.push(`t.card_id IN (${cardIds.join(',')})`)
+  } else if (filters.cardId) {
     clauses.push('t.card_id = @cardId')
     params.cardId = filters.cardId
   }
-  if (filters.categoryId === 'uncategorized') {
+  if (filters.categoryIds && filters.categoryIds.length) {
+    const numeric = filters.categoryIds.filter((c): c is number => Number.isInteger(c as number))
+    const parts: string[] = []
+    if (numeric.length) parts.push(`t.category_id IN (${numeric.join(',')})`)
+    if (filters.categoryIds.includes('uncategorized')) parts.push('t.category_id IS NULL')
+    if (parts.length) clauses.push(parts.length > 1 ? `(${parts.join(' OR ')})` : parts[0])
+  } else if (filters.categoryId === 'uncategorized') {
     clauses.push('t.category_id IS NULL')
   } else if (filters.categoryId) {
     clauses.push('t.category_id = @categoryId')

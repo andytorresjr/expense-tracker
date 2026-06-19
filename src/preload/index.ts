@@ -33,6 +33,7 @@ const CHANNELS = new Set([
   'import.batches',
   'import.deleteBatch',
   'dashboard.getKpis',
+  'dashboard.exportPdf',
   'db.getPath',
   'db.backup',
   'db.restore',

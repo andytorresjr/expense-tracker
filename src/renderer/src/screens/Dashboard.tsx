@@ -12,9 +12,12 @@ import {
   XAxis,
   YAxis
 } from 'recharts'
-import type { Kpis } from '@shared/types'
+import type { Kpis, KpiFilters } from '@shared/types'
 import { api, fmtMoney } from '../api'
 import { useGlobalFilter } from '../App'
+import PrintableDashboard, { type DashboardReportMeta } from '../components/PrintableDashboard'
+
+const nextFrame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()))
 
 type RangeKey = 'this_month' | 'last_month' | 'last_3' | 'this_year' | 'custom'
 
@@ -59,19 +62,58 @@ function StatCard({ title, children }: { title: string; children: React.ReactNod
 
 export default function Dashboard(): React.JSX.Element {
   const { expenseType } = useGlobalFilter()
-  const [rangeKey, setRangeKey] = useState<RangeKey>('this_month')
-  const [custom, setCustom] = useState(() => rangeFor('this_month'))
+  // Default to last month: users import their statements at month-end, so the most
+  // recently completed month is the data they actually want to see on load.
+  const [rangeKey, setRangeKey] = useState<RangeKey>('last_month')
+  const [custom, setCustom] = useState(() => rangeFor('last_month'))
   const [kpis, setKpis] = useState<Kpis | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [printState, setPrintState] = useState<{ kpis: Kpis; meta: DashboardReportMeta } | null>(null)
 
   const range = useMemo(() => (rangeKey === 'custom' ? custom : rangeFor(rangeKey)), [rangeKey, custom])
 
+  const filters: KpiFilters = useMemo(
+    () => ({ expenseType, dateFrom: range.from, dateTo: range.to }),
+    [expenseType, range.from, range.to]
+  )
+
   const load = useCallback((): void => {
     api.dashboard
-      .getKpis({ expenseType, dateFrom: range.from, dateTo: range.to })
+      .getKpis(filters)
       .then(setKpis)
       .catch((e) => setError(e.message))
-  }, [expenseType, range.from, range.to])
+  }, [filters])
+
+  const exportPdf = useCallback(async (): Promise<void> => {
+    if (!kpis) return
+    setError(null)
+    setNotice(null)
+    setExporting(true)
+    setPrintState({
+      kpis,
+      meta: {
+        scope: expenseType,
+        cardLabel: 'All cards',
+        dateFrom: range.from,
+        dateTo: range.to,
+        generatedAt: new Date().toLocaleString()
+      }
+    })
+    // Let the #print-root view mount and charts paint before capturing.
+    await nextFrame()
+    await nextFrame()
+    try {
+      const result = await api.dashboard.exportPdf(filters)
+      if (result) setNotice(`Saved dashboard PDF to ${result.path}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPrintState(null)
+      setExporting(false)
+    }
+  }, [kpis, expenseType, range.from, range.to, filters])
 
   useEffect(load, [load])
 
@@ -105,9 +147,18 @@ export default function Dashboard(): React.JSX.Element {
             <input type="date" className="input !py-1" value={custom.to} onChange={(e) => setCustom({ ...custom, to: e.target.value })} />
           </div>
         )}
+        <button
+          className="btn-secondary !py-1.5 ml-auto"
+          onClick={exportPdf}
+          disabled={!kpis || exporting}
+          title="Save the current dashboard view as a PDF"
+        >
+          {exporting ? 'Exporting…' : '⤓ Export PDF'}
+        </button>
       </div>
 
       {error && <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-4 py-3 text-sm">{error}</div>}
+      {notice && <div className="rounded-lg bg-green-50 border border-green-200 text-green-700 px-4 py-3 text-sm">{notice}</div>}
 
       {kpis && (
         <>
@@ -260,6 +311,8 @@ export default function Dashboard(): React.JSX.Element {
           </div>
         </>
       )}
+
+      {printState && <PrintableDashboard kpis={printState.kpis} meta={printState.meta} />}
     </div>
   )
 }

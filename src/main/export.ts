@@ -1,6 +1,6 @@
 import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
-import type { ExportFormat, Txn, TxnFilters } from '@shared/types'
+import type { ExportFormat, KpiFilters, Txn, TxnFilters } from '@shared/types'
 
 /** Columns written to exported files, in order. */
 const COLUMNS = ['Date', 'Description', 'Amount', 'Type', 'Category', 'Card'] as const
@@ -55,6 +55,20 @@ export function buildExportFileName(filters: TxnFilters, rows: Txn[], format: Ex
   parts.push(localIsoDate(now))
   const base = (parts.join('-') || 'transactions').slice(0, 180).replace(/-+$/g, '')
   return `${base}.${format}`
+}
+
+/** Filename for a Quick Report export: the report's name plus the date stamp. */
+export function buildReportFileName(base: string, format: ExportFormat, now = new Date()): string {
+  const name = [sanitizeSegment(base), localIsoDate(now)].join('-').slice(0, 180).replace(/-+$/g, '')
+  return `${name || 'report'}.${format}`
+}
+
+export function buildDashboardFileName(filters: KpiFilters, now = new Date()): string {
+  const scope =
+    filters.expenseType === 'business' ? 'Business' : filters.expenseType === 'personal' ? 'Personal' : 'All'
+  const parts = ['dashboard', scope, filters.dateFrom, 'to', filters.dateTo, localIsoDate(now)].map(sanitizeSegment)
+  const base = (parts.join('-') || 'dashboard').slice(0, 180).replace(/-+$/g, '')
+  return `${base}.pdf`
 }
 
 /**

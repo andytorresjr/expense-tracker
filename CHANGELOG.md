@@ -4,6 +4,11 @@ All notable changes to Expense Tracker. The same notes appear on each
 [GitHub release](https://github.com/andytorresjr/expense-tracker/releases), and the
 in-app updater shows them when a new version is found.
 
+## 1.3.0-beta.1 — 2026-06-19
+- Added **Quick Reports** (new sidebar page): save reusable shortcuts that capture a set of filters — reporting view, any number of cards and categories, a description search, and a date range — then export the matching statement as CSV, Excel, or PDF in one click.
+- Added **Export PDF** to the Dashboard: save the current dashboard view (KPIs, category breakdown, monthly trend, top vendors, and budgets) as a PDF, respecting the active date range and reporting view.
+- Moved **Cards** management into **Settings**; the standalone Cards sidebar item has been removed.
+
 ## 1.2.4-beta.1 — 2026-06-18
 - Moved to **beta** version labeling (`-beta` suffix) while the app is in pre-production. The version shown in the app, installers, and releases now reads e.g. `v1.2.4-beta.1`.
 - The in-app updater now accepts pre-release builds, so beta installs update to newer betas (and to the eventual production release).

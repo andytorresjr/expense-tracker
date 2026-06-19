@@ -5,6 +5,7 @@ import type {
   CategoryRule,
   ColumnMapping,
   CommitRow,
+  DashboardExportResult,
   ExpenseType,
   ExportFormat,
   ExportResult,
@@ -70,9 +71,10 @@ export const api = {
       call<number>('transactions.bulkUpdate', { ids, ...fields }),
     clear: (request: TransactionClearRequest) => call<TransactionDeleteResult>('transactions.clear', request),
     exportRows: (filters: TxnFilters) => call<Txn[]>('transactions.exportRows', filters),
-    export: (filters: TxnFilters, format: ExportFormat) =>
-      call<ExportResult | null>('transactions.export', { filters, format }),
-    exportPdf: (filters: TxnFilters) => call<ExportResult | null>('transactions.export', { filters, format: 'pdf' })
+    export: (filters: TxnFilters, format: ExportFormat, fileNameBase?: string) =>
+      call<ExportResult | null>('transactions.export', { filters, format, fileNameBase }),
+    exportPdf: (filters: TxnFilters, fileNameBase?: string) =>
+      call<ExportResult | null>('transactions.export', { filters, format: 'pdf', fileNameBase })
   },
   import: {
     pickFile: () => call<ParsedFile | null>('import.pickFile'),
@@ -84,7 +86,8 @@ export const api = {
     deleteBatch: (id: number) => call<TransactionDeleteResult>('import.deleteBatch', { id })
   },
   dashboard: {
-    getKpis: (filters: KpiFilters) => call<Kpis>('dashboard.getKpis', filters)
+    getKpis: (filters: KpiFilters) => call<Kpis>('dashboard.getKpis', filters),
+    exportPdf: (filters: KpiFilters) => call<DashboardExportResult | null>('dashboard.exportPdf', { filters })
   },
   db: {
     getPath: () => call<string>('db.getPath'),

@@ -7,6 +7,8 @@ export interface ReportMeta {
   cardLabel: string
   search: string
   generatedAt: string
+  /** Explicit report title (Quick Reports); otherwise derived from the category. */
+  title?: string
 }
 
 const scopeText = (scope: ExpenseTypeFilter): string =>
@@ -21,7 +23,7 @@ const scopeText = (scope: ExpenseTypeFilter): string =>
 export default function PrintableReport({ rows, meta }: { rows: Txn[]; meta: ReportMeta }): React.JSX.Element {
   const total = rows.reduce((sum, txn) => sum + txn.amount, 0)
   const hasCategory = meta.categoryLabel !== 'All categories'
-  const title = hasCategory ? `${meta.categoryLabel} — spending report` : 'Transactions report'
+  const title = meta.title ?? (hasCategory ? `${meta.categoryLabel} — spending report` : 'Transactions report')
 
   return (
     <div id="print-root" style={{ color: '#000', fontFamily: 'Arial, Helvetica, sans-serif', padding: '24px' }}>
