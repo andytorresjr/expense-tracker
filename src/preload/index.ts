@@ -25,6 +25,7 @@ const CHANNELS = new Set([
   'transactions.bulkUpdate',
   'transactions.clear',
   'transactions.categorizeQueue',
+  'transactions.cardholderSpend',
   'transactions.export',
   'transactions.exportRows',
   'import.pickFile',

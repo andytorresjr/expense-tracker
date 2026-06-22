@@ -87,6 +87,15 @@ function isValueCell(cell: string): boolean {
   return cell !== '' && (parseAmount(cell) !== null || parseDate(cell, 'auto') !== null)
 }
 
+/** Column indexes in a row whose cell reads as transaction data. */
+function valueColumns(row: string[]): Set<number> {
+  const cols = new Set<number>()
+  row.forEach((c, i) => {
+    if (isValueCell(c.trim())) cols.add(i)
+  })
+  return cols
+}
+
 /**
  * Locate the column-header row in a raw cell grid.
  *
@@ -106,6 +115,10 @@ function isValueCell(cell: string): boolean {
  *
  * Fallbacks cover atypical files (e.g. headers whose column names look numeric);
  * a degenerate single-column grid ultimately falls back to row 0.
+ *
+ * Returns -1 when the file carries no header row at all — some exports (e.g. the
+ * Amex "Transaction Details" .xlsx) start straight at transaction data. Callers
+ * treat -1 by synthesizing generic column names and keeping every row as data.
  */
 export function detectHeaderRow(matrix: Matrix): number {
   const fill = matrix.map((row) => row.reduce((n, c) => (c.trim() !== '' ? n + 1 : n), 0))
@@ -126,6 +139,21 @@ export function detectHeaderRow(matrix: Matrix): number {
   // Primary: a (near-)full-width row of pure labels sitting above real data.
   for (let i = 0; i < matrix.length; i++) {
     if (fill[i] >= widthBar && values[i] === 0 && dataFollows(i)) return i
+  }
+  // Headerless: no pure-label row exists, and the first substantial row is
+  // already transaction data. A real header is pure labels; if the first
+  // (near-)full-width row carries multiple value cells that line up with the
+  // value columns of the row beneath it, the rows form a data grid with no
+  // header. The shared-column test distinguishes this from a one-off
+  // numeric-looking header sitting above differently-shaped data (Fallback A).
+  const firstFull = fill.findIndex((f) => f >= widthBar)
+  if (firstFull !== -1 && values[firstFull] >= 2) {
+    let next = firstFull + 1
+    while (next < matrix.length && fill[next] === 0) next++
+    const here = valueColumns(matrix[firstFull].map((c) => c.trim()))
+    const below = next < matrix.length ? valueColumns(matrix[next].map((c) => c.trim())) : here
+    const shared = [...here].filter((c) => below.has(c)).length
+    if (shared >= 2) return -1
   }
   // Fallback A: two adjacent (near-)full-width rows — for headers whose own
   // column names parse as values, which the pure-label test above rejects.
@@ -148,6 +176,7 @@ export function detectHeaderRow(matrix: Matrix): number {
  */
 function recordsFromMatrix(matrix: Matrix): { headers: string[]; rows: Record<string, string>[] } {
   const headerIdx = detectHeaderRow(matrix)
+  if (headerIdx === -1) return recordsFromHeaderless(matrix)
   const rawHeader = matrix[headerIdx] ?? []
 
   const seen = new Map<string, number>()
@@ -171,6 +200,33 @@ function recordsFromMatrix(matrix: Matrix): { headers: string[]; rows: Record<st
       if (value) hasValue = true
       record[key] = value
     }
+    if (hasValue) rows.push(record)
+  }
+  return { headers, rows }
+}
+
+/**
+ * Build records for a headerless grid (no column-name row). Synthesizes generic
+ * "Column N" names over the columns that carry any data, keeps every non-blank
+ * row, and trims every value — the mapping UI then relies on content-based
+ * suggestions plus the data preview rather than header names.
+ */
+function recordsFromHeaderless(matrix: Matrix): { headers: string[]; rows: Record<string, string>[] } {
+  const width = matrix.reduce((max, row) => Math.max(max, row.length), 0)
+  const used = Array.from({ length: width }, (_, i) => i).filter((i) =>
+    matrix.some((row) => (row[i] ?? '').trim() !== '')
+  )
+
+  const headers = used.map((_, k) => `Column ${k + 1}`)
+  const rows: Record<string, string>[] = []
+  for (const row of matrix) {
+    const record: Record<string, string> = {}
+    let hasValue = false
+    used.forEach((index, k) => {
+      const value = (row[index] ?? '').trim()
+      if (value) hasValue = true
+      record[headers[k]] = value
+    })
     if (hasValue) rows.push(record)
   }
   return { headers, rows }
@@ -738,6 +794,173 @@ async function recordsFromPdf(filePath: string): Promise<{ headers: string[]; ro
   }
 }
 
+// ---------- column-mapping suggestion ----------
+
+type ColumnStats = {
+  header: string
+  count: number
+  dateRate: number
+  amountRate: number
+  moneyRate: number
+  alphaRate: number
+  newlineRate: number
+  nameLikeRate: number
+  distinctRatio: number
+  avgLen: number
+}
+
+// Two-plus whitespace-separated words of letters only (allowing . ' -), e.g.
+// "ADOLFO CAMPERO" or "JOHN T HALL" — person names, not merchants or categories
+// (those carry digits, &, or are single words).
+const NAME_LIKE = /^[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*)+$/
+
+/** Profile a single column over a sample of rows: how often its cells read as
+ *  dates, amounts, currency-shaped amounts, prose, etc. */
+function columnStats(header: string, rows: Record<string, string>[]): ColumnStats {
+  const sample = rows.slice(0, 200)
+  const distinct = new Set<string>()
+  let count = 0
+  let date = 0
+  let amount = 0
+  let money = 0
+  let alpha = 0
+  let newline = 0
+  let nameLike = 0
+  let lenSum = 0
+  for (const row of sample) {
+    const value = (row[header] ?? '').trim()
+    if (!value) continue
+    count++
+    distinct.add(value)
+    lenSum += value.length
+    if (parseDate(value, 'auto') !== null) date++
+    if (parseAmount(value) !== null) {
+      amount++
+      if (/[.,$€£¥]/.test(value)) money++ // a separator/symbol marks real currency, not a bare integer code
+    }
+    if (/[a-z]{2,}/i.test(value)) alpha++
+    if (/\n/.test(value)) newline++
+    if (NAME_LIKE.test(value)) nameLike++
+  }
+  const safe = (n: number): number => (count ? n / count : 0)
+  return {
+    header,
+    count,
+    dateRate: safe(date),
+    amountRate: safe(amount),
+    moneyRate: safe(money),
+    alphaRate: safe(alpha),
+    newlineRate: safe(newline),
+    nameLikeRate: safe(nameLike),
+    distinctRatio: safe(distinct.size),
+    avgLen: safe(lenSum)
+  }
+}
+
+/**
+ * Suggest a column mapping. Header names win when they carry recognizable labels
+ * (Date/Amount/Description/Credit); any role left unresolved — notably for
+ * headerless files whose columns are generic "Column N" — is filled by reading
+ * the cell content of each column.
+ */
+export function suggestMapping(headers: string[], rows: Record<string, string>[]): ColumnMapping {
+  const byName = (...needles: string[]): string =>
+    headers.find((h) => needles.some((n) => h.toLowerCase().includes(n))) ?? ''
+
+  let date_col = byName('transaction date', 'date')
+  let amount_col = byName('amount', 'debit', 'charge')
+  const amount_col_secondary = byName('credit') || null
+  let description_col = byName('description', 'merchant', 'payee', 'name')
+
+  const stats = new Map(headers.map((h) => [h, columnStats(h, rows)]))
+  const at = (h: string): number => headers.indexOf(h)
+
+  // Date: the column whose cells most often parse as dates.
+  if (!date_col) {
+    const best = headers
+      .map((h) => stats.get(h)!)
+      .filter((s) => s.dateRate >= 0.6)
+      .sort((a, b) => b.dateRate - a.dateRate || at(a.header) - at(b.header))[0]
+    if (best) date_col = best.header
+  }
+
+  // Amount: a column whose cells parse as amounts, preferring currency-shaped
+  // values with varied amounts over constant numeric codes (card last-4, ref #s).
+  if (!amount_col) {
+    const best = headers
+      .map((h) => stats.get(h)!)
+      .filter((s) => s.header !== date_col && s.amountRate >= 0.6)
+      .sort(
+        (a, b) =>
+          b.moneyRate - a.moneyRate || b.distinctRatio - a.distinctRatio || b.amountRate - a.amountRate
+      )[0]
+    if (best) amount_col = best.header
+  }
+
+  // Description: the first prose column to the right of the date — merchant/payee
+  // text sits there in virtually every statement, ahead of the amount.
+  if (!description_col) {
+    const isText = (s: ColumnStats): boolean =>
+      s.count > 0 &&
+      s.dateRate < 0.5 &&
+      s.amountRate < 0.5 &&
+      s.alphaRate >= 0.5 &&
+      s.newlineRate < 0.5 &&
+      s.avgLen >= 3 &&
+      s.header !== date_col &&
+      s.header !== amount_col
+    const dateIndex = date_col ? at(date_col) : -1
+    const textCols = headers.map((h) => stats.get(h)!).filter(isText)
+    const afterDate = textCols.filter((s) => at(s.header) > dateIndex).sort((a, b) => at(a.header) - at(b.header))
+    const fallback = [...textCols].sort((a, b) => b.distinctRatio - a.distinctRatio || at(a.header) - at(b.header))
+    const chosen = afterDate[0] ?? fallback[0]
+    if (chosen) description_col = chosen.header
+  }
+
+  // Cardholder (optional): the individual who made the charge — e.g. the Amex
+  // "Card Member" column. It reads as a small set of person names repeated across
+  // many rows: multi-word letter-only text (no digits, no &) with a low distinct
+  // ratio. Statements place it right next to the description (date, merchant,
+  // card member, …), so proximity to the description is the deciding signal —
+  // it's what separates the cardholder from equally name-shaped but far-right
+  // columns like country, city, or a repeated merchant name.
+  let cardholder_col: string | null = byName('cardholder', 'card member', 'cardmember', 'card holder') || null
+  if (!cardholder_col) {
+    const descIndex = description_col ? at(description_col) : -1
+    const candidate = headers
+      .map((h) => stats.get(h)!)
+      .filter(
+        (s) =>
+          s.count > 0 &&
+          s.header !== date_col &&
+          s.header !== amount_col &&
+          s.header !== description_col &&
+          s.newlineRate < 0.5 &&
+          s.avgLen >= 4 &&
+          s.avgLen <= 40 &&
+          s.nameLikeRate >= 0.6 &&
+          s.distinctRatio <= 0.6
+      )
+      // Closest to the description wins; break ties toward fewer distinct names.
+      .sort((a, b) => {
+        const da = descIndex >= 0 ? Math.abs(at(a.header) - descIndex) : 0
+        const db = descIndex >= 0 ? Math.abs(at(b.header) - descIndex) : 0
+        return da - db || a.distinctRatio - b.distinctRatio
+      })[0]
+    if (candidate) cardholder_col = candidate.header
+  }
+
+  return {
+    date_col,
+    amount_col,
+    amount_col_secondary,
+    description_col,
+    cardholder_col,
+    date_format: 'auto',
+    amount_sign: 'expense_positive'
+  }
+}
+
 export async function parseFile(filePath: string): Promise<ParsedFile> {
   const ext = extname(filePath).toLowerCase()
   let parsed: { headers: string[]; rows: Record<string, string>[] }
@@ -770,7 +993,14 @@ export async function parseFile(filePath: string): Promise<ParsedFile> {
   if (headers.length === 0 || rows.length === 0) {
     throw new Error('No data rows found in the file.')
   }
-  return { path: filePath, filename: basename(filePath), headers, rows, rowCount: rows.length }
+  return {
+    path: filePath,
+    filename: basename(filePath),
+    headers,
+    rows,
+    rowCount: rows.length,
+    suggestedMapping: suggestMapping(headers, rows)
+  }
 }
 
 // ---------- normalization ----------
@@ -873,13 +1103,23 @@ export function buildPreview(
   const categoryNames = new Map(
     (db.prepare('SELECT id, name FROM categories').all() as { id: number; name: string }[]).map((c) => [c.id, c.name])
   )
-  const hashExists = db.prepare('SELECT 1 FROM transactions WHERE dedupe_hash = ?')
+  const hashCount = db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE dedupe_hash = ?')
 
-  const seenInFile = new Set<string>()
+  // Dedup by multiplicity, not existence: a statement is authoritative for how
+  // many times an identical (date, amount, description) charge occurred. The
+  // first N occurrences in the file — where N is how many the DB already holds —
+  // are flagged as already-imported; any beyond N are genuinely new. This lets
+  // legitimately repeated charges import while a re-imported statement still
+  // dedupes cleanly (file count == DB count → nothing new).
+  const alreadyInDb = new Map<string, number>()
+  const seenInFile = new Map<string, number>()
   const preview: PreviewRow[] = rows.map((row, index) => {
     const description = normalizeDescription(row[mapping.description_col] ?? '')
     const txn_date = parseDate(row[mapping.date_col] ?? '', mapping.date_format)
     const amount = resolveAmount(row, mapping)
+    const cardholder = mapping.cardholder_col
+      ? normalizeDescription(row[mapping.cardholder_col] ?? '') || null
+      : null
 
     let error: string | null = null
     if (!description) error = 'Missing description'
@@ -889,8 +1129,14 @@ export function buildPreview(
     let duplicate = false
     if (!error && txn_date && amount !== null) {
       const hash = dedupeHash(card.id, txn_date, amount, description)
-      duplicate = seenInFile.has(hash) || hashExists.get(hash) !== undefined
-      seenInFile.add(hash)
+      let dbCount = alreadyInDb.get(hash)
+      if (dbCount === undefined) {
+        dbCount = (hashCount.get(hash) as { n: number }).n
+        alreadyInDb.set(hash, dbCount)
+      }
+      const seen = seenInFile.get(hash) ?? 0
+      duplicate = seen < dbCount
+      seenInFile.set(hash, seen + 1)
     }
 
     const matched = error ? { category_id: null, expense_type: null } : applyRules(rules, description)
@@ -906,6 +1152,7 @@ export function buildPreview(
       needsReview: !error && matched.expense_type === null,
       category_id,
       category_name: category_id !== null ? (categoryNames.get(category_id) ?? null) : null,
+      cardholder,
       duplicate,
       error
     }
@@ -929,12 +1176,19 @@ export function commitImport(
     'INSERT INTO import_batches (card_id, filename, row_count, inserted_count, skipped_count) VALUES (?, ?, ?, 0, 0)'
   )
   const updateBatch = db.prepare('UPDATE import_batches SET inserted_count = ?, skipped_count = ? WHERE id = ?')
+  const hashCount = db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE dedupe_hash = ?')
   const insertTxn = db.prepare(
-    `INSERT OR IGNORE INTO transactions
-       (card_id, txn_date, description, amount, expense_type, category_id, import_batch_id, dedupe_hash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO transactions
+       (card_id, txn_date, description, amount, expense_type, category_id, import_batch_id, dedupe_hash, cardholder)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
 
+  // Multiplicity dedup mirrors buildPreview: skip the first occurrence of each
+  // hash for every copy already in the DB, insert the rest. The DB count is
+  // snapshotted per hash on first sight (not re-queried after inserts), so
+  // re-running the same batch is idempotent — the second run finds its own
+  // earlier inserts and skips them all.
+  const skipQuota = new Map<string, number>()
   let inserted = 0
   let skipped = 0
   let batchId = 0
@@ -942,7 +1196,15 @@ export function commitImport(
     batchId = Number(insertBatch.run(cardId, filename, rows.length).lastInsertRowid)
     for (const row of rows) {
       const hash = dedupeHash(cardId, row.txn_date, row.amount, row.description)
-      const result = insertTxn.run(
+      let quota = skipQuota.get(hash)
+      if (quota === undefined) quota = (hashCount.get(hash) as { n: number }).n
+      if (quota > 0) {
+        skipQuota.set(hash, quota - 1)
+        skipped++
+        continue
+      }
+      skipQuota.set(hash, 0)
+      insertTxn.run(
         cardId,
         row.txn_date,
         row.description,
@@ -950,10 +1212,10 @@ export function commitImport(
         row.expense_type,
         row.category_id,
         batchId,
-        hash
+        hash,
+        row.cardholder
       )
-      if (result.changes > 0) inserted++
-      else skipped++
+      inserted++
     }
     updateBatch.run(inserted, skipped, batchId)
   })

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS import_profiles (
   amount_col_secondary TEXT,
   date_format TEXT,
   amount_sign TEXT NOT NULL DEFAULT 'expense_positive' CHECK (amount_sign IN ('expense_positive','expense_negative')),
+  cardholder_col TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(card_id)
 );
@@ -64,8 +65,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   category_locked INTEGER NOT NULL DEFAULT 0,
   import_batch_id INTEGER REFERENCES import_batches(id) ON DELETE SET NULL,
   dedupe_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(dedupe_hash)
+  cardholder TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS budgets (
@@ -80,6 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date);
 CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_txn_card ON transactions(card_id);
 CREATE INDEX IF NOT EXISTS idx_txn_type ON transactions(expense_type);
+CREATE INDEX IF NOT EXISTS idx_txn_dedupe ON transactions(dedupe_hash);
 `
 
 const SEED_CATEGORIES: [string, string][] = [
@@ -108,6 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date);
 CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_txn_card ON transactions(card_id);
 CREATE INDEX IF NOT EXISTS idx_txn_type ON transactions(expense_type);
+CREATE INDEX IF NOT EXISTS idx_txn_dedupe ON transactions(dedupe_hash);
 `)
 }
 
@@ -123,6 +126,24 @@ function ensureCategoryHotkeyColumn(database: Database.Database): void {
     database.exec('ALTER TABLE categories ADD COLUMN hotkey TEXT')
   }
   createCategoryIndexes(database)
+}
+
+/** Add the per-transaction cardholder column to databases created before the
+ *  cardholder feature. Runs after the table-rebuild migrations, which only fire
+ *  on databases too old to carry this column, so a plain ALTER is safe. */
+function ensureTransactionCardholderColumn(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(transactions)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'cardholder')) {
+    database.exec('ALTER TABLE transactions ADD COLUMN cardholder TEXT')
+  }
+}
+
+/** Add the saved cardholder-column mapping to pre-existing import profiles. */
+function ensureProfileCardholderColumn(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(import_profiles)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'cardholder_col')) {
+    database.exec('ALTER TABLE import_profiles ADD COLUMN cardholder_col TEXT')
+  }
 }
 
 function ensureNullableTransactionType(database: Database.Database): void {
@@ -146,8 +167,7 @@ CREATE TABLE transactions_new (
   category_locked INTEGER NOT NULL DEFAULT 0,
   import_batch_id INTEGER REFERENCES import_batches(id) ON DELETE SET NULL,
   dedupe_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(dedupe_hash)
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 INSERT INTO transactions_new (
@@ -190,6 +210,81 @@ ALTER TABLE transactions_new RENAME TO transactions;
   createTransactionIndexes(database)
 }
 
+/**
+ * Drop the legacy UNIQUE(dedupe_hash) constraint. The original schema deduped by
+ * hash existence, which silently collapsed legitimately repeated charges — a
+ * statement may list the same merchant, date, and amount several times (e.g. six
+ * identical $2.00 service fees in one day). Dedup is now multiplicity-based in the
+ * importer, so the table must permit multiple rows sharing a hash; a plain index
+ * keeps the occurrence-count lookups fast.
+ */
+function ensureDedupeMultiplicity(database: Database.Database): void {
+  const sql = tableSql(database, 'transactions')
+  if (!/UNIQUE\s*\(\s*dedupe_hash\s*\)/i.test(sql)) {
+    createTransactionIndexes(database)
+    return
+  }
+
+  const priorForeignKeys = database.pragma('foreign_keys', { simple: true }) as number
+  database.pragma('foreign_keys = OFF')
+  try {
+    const migrate = database.transaction(() => {
+      database.exec(`
+CREATE TABLE transactions_new (
+  id INTEGER PRIMARY KEY,
+  card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  txn_date TEXT NOT NULL,
+  description TEXT NOT NULL,
+  amount REAL NOT NULL,
+  expense_type TEXT CHECK (expense_type IN ('business','personal')),
+  type_locked INTEGER NOT NULL DEFAULT 0,
+  category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  category_locked INTEGER NOT NULL DEFAULT 0,
+  import_batch_id INTEGER REFERENCES import_batches(id) ON DELETE SET NULL,
+  dedupe_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO transactions_new (
+  id,
+  card_id,
+  txn_date,
+  description,
+  amount,
+  expense_type,
+  type_locked,
+  category_id,
+  category_locked,
+  import_batch_id,
+  dedupe_hash,
+  created_at
+)
+SELECT
+  id,
+  card_id,
+  txn_date,
+  description,
+  amount,
+  expense_type,
+  type_locked,
+  category_id,
+  category_locked,
+  import_batch_id,
+  dedupe_hash,
+  created_at
+FROM transactions;
+
+DROP TABLE transactions;
+ALTER TABLE transactions_new RENAME TO transactions;
+`)
+    })
+    migrate()
+  } finally {
+    database.pragma(`foreign_keys = ${priorForeignKeys ? 'ON' : 'OFF'}`)
+  }
+  createTransactionIndexes(database)
+}
+
 function ensureSeedCategories(database: Database.Database): void {
   const insert = database.prepare('INSERT OR IGNORE INTO categories (name, color) VALUES (?, ?)')
   const seedMissing = database.transaction(() => {
@@ -204,6 +299,9 @@ export function initDb(dbPath: string): Database.Database {
   db.pragma('foreign_keys = ON')
   db.exec(SCHEMA)
   ensureNullableTransactionType(db)
+  ensureDedupeMultiplicity(db)
+  ensureTransactionCardholderColumn(db)
+  ensureProfileCardholderColumn(db)
   ensureCategoryHotkeyColumn(db)
 
   const count = db.prepare('SELECT COUNT(*) AS n FROM categories').get() as { n: number }

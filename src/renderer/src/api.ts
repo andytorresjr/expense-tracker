@@ -1,6 +1,7 @@
 import type {
   Budget,
   Card,
+  CardholderSpend,
   Category,
   CategoryRule,
   ColumnMapping,
@@ -64,6 +65,7 @@ export const api = {
   },
   transactions: {
     list: (filters: TxnFilters) => call<TxnPage>('transactions.list', filters),
+    cardholderSpend: (filters: TxnFilters) => call<CardholderSpend[]>('transactions.cardholderSpend', filters),
     categorizeQueue: () => call<Txn[]>('transactions.categorizeQueue'),
     update: (id: number, fields: { category_id?: number | null; expense_type?: ExpenseType | null }) =>
       call<Txn>('transactions.update', { id, ...fields }),

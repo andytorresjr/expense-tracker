@@ -58,6 +58,16 @@ export default function App(): React.JSX.Element {
     setExpenseTypeState(t)
   }
 
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem('sidebarCollapsed') === '1'
+  )
+  const toggleSidebar = (): void =>
+    setSidebarCollapsed((v) => {
+      const next = !v
+      localStorage.setItem('sidebarCollapsed', next ? '1' : '0')
+      return next
+    })
+
   const [locked, setLocked] = useState(false)
   const [lockConfig, setLockConfig] = useState(getLockConfig)
   const refreshLockConfig = useCallback(() => setLockConfig(getLockConfig()), [])
@@ -89,22 +99,40 @@ export default function App(): React.JSX.Element {
     <LockContext.Provider value={{ lockNow, refreshLockConfig }}>
     <FilterContext.Provider value={{ expenseType, setExpenseType }}>
       <div className="flex h-screen">
-        <aside className="w-56 shrink-0 bg-slate-900 text-slate-200 flex flex-col">
-          <div className="px-5 py-5 text-lg font-semibold text-white">Expense Tracker</div>
+        <aside
+          className={`${sidebarCollapsed ? 'w-16' : 'w-56'} shrink-0 bg-slate-900 text-slate-200 flex flex-col transition-[width] duration-200`}
+        >
+          <div
+            className={`flex items-center py-5 ${sidebarCollapsed ? 'justify-center px-0' : 'justify-between px-5'}`}
+          >
+            {!sidebarCollapsed && <span className="text-lg font-semibold text-white">Expense Tracker</span>}
+            <button
+              onClick={toggleSidebar}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="text-slate-400 hover:text-white rounded-lg p-1.5 hover:bg-slate-800"
+            >
+              {sidebarCollapsed ? '»' : '«'}
+            </button>
+          </div>
           <nav className="flex-1 px-2 space-y-1">
             {NAV.map((item) => (
               <button
                 key={item.id}
                 onClick={() => setScreen(item.id)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
-                  screen === item.id ? 'bg-slate-700 text-white' : 'hover:bg-slate-800'
-                }`}
+                title={sidebarCollapsed ? item.label : undefined}
+                className={`w-full px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
+                  sidebarCollapsed ? 'justify-center' : 'text-left'
+                } ${screen === item.id ? 'bg-slate-700 text-white' : 'hover:bg-slate-800'}`}
               >
-                <span>{item.icon}</span> {item.label}
+                <span>{item.icon}</span>
+                {!sidebarCollapsed && item.label}
               </button>
             ))}
           </nav>
-          <div className="px-5 py-4 text-xs text-slate-500">100% local — your data never leaves this PC</div>
+          {!sidebarCollapsed && (
+            <div className="px-5 py-4 text-xs text-slate-500">100% local — your data never leaves this PC</div>
+          )}
         </aside>
 
         <div className="flex-1 flex flex-col min-w-0">

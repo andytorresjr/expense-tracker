@@ -1,6 +1,6 @@
 {
   "name": "expense-tracker",
-  "version": "1.3.0-beta.1",
+  "version": "1.3.0-beta.2",
   "description": "Local expense tracker for company card statements. Fully offline.",
   "main": "./out/main/index.js",
   "author": {

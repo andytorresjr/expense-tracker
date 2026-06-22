@@ -6,7 +6,7 @@ import { getDb, closeDb, initDb } from './db'
 import { buildPreview, commitImport, parseFile } from './importer'
 import { rerunRules } from './rules'
 import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
-import { appendWhere, buildTxnWhere, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
+import { appendWhere, buildTxnWhere, fetchCardholderSpend, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
 import { buildCsv, buildDashboardFileName, buildExportFileName, buildReportFileName, buildXlsx } from './export'
 import { checkForUpdates } from './updater'
 import type {
@@ -188,11 +188,12 @@ export function registerIpcHandlers(): void {
   handle('profiles.save', (p: { cardId: number; mapping: ColumnMapping }) => {
     getDb()
       .prepare(
-        `INSERT INTO import_profiles (card_id, name, date_col, amount_col, description_col, amount_col_secondary, date_format, amount_sign)
-         VALUES (@cardId, 'default', @date_col, @amount_col, @description_col, @amount_col_secondary, @date_format, @amount_sign)
+        `INSERT INTO import_profiles (card_id, name, date_col, amount_col, description_col, amount_col_secondary, cardholder_col, date_format, amount_sign)
+         VALUES (@cardId, 'default', @date_col, @amount_col, @description_col, @amount_col_secondary, @cardholder_col, @date_format, @amount_sign)
          ON CONFLICT(card_id) DO UPDATE SET
            date_col = @date_col, amount_col = @amount_col, description_col = @description_col,
-           amount_col_secondary = @amount_col_secondary, date_format = @date_format, amount_sign = @amount_sign`
+           amount_col_secondary = @amount_col_secondary, cardholder_col = @cardholder_col,
+           date_format = @date_format, amount_sign = @amount_sign`
       )
       .run({ cardId: p.cardId, ...p.mapping })
     return true
@@ -331,6 +332,8 @@ export function registerIpcHandlers(): void {
       )
       .all()
   )
+  // Net spend per cardholder for the current filters — biggest spender first.
+  handle('transactions.cardholderSpend', (filters: TxnFilters) => fetchCardholderSpend(getDb(), filters))
   // Full filtered row set for the printable report (rendered in the renderer).
   handle('transactions.exportRows', (filters: TxnFilters) => fetchTransactionsForExport(getDb(), filters))
   // Write the filtered rows to a CSV, Excel file, or mounted PDF report the user chooses via save dialog.

@@ -2,9 +2,14 @@ import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import type { ExportFormat, KpiFilters, Txn, TxnFilters } from '@shared/types'
 
-/** Columns written to exported files, in order. */
-const COLUMNS = ['Date', 'Description', 'Amount', 'Type', 'Category', 'Card'] as const
-type Column = (typeof COLUMNS)[number]
+/** Columns written to exported files, in order. Cardholder is appended only when
+ *  the data carries it, so statements without that column export unchanged. */
+const BASE_COLUMNS = ['Date', 'Description', 'Amount', 'Type', 'Category', 'Card'] as const
+type Column = (typeof BASE_COLUMNS)[number] | 'Cardholder'
+
+function exportColumns(rows: Txn[]): Column[] {
+  return rows.some((txn) => txn.cardholder) ? [...BASE_COLUMNS, 'Cardholder'] : [...BASE_COLUMNS]
+}
 function categorySegment(filters: TxnFilters, rows: Txn[]): string | null {
   if (filters.categoryId === 'uncategorized') return 'Uncategorized'
   if (typeof filters.categoryId === 'number') {
@@ -84,22 +89,31 @@ function toRecord(txn: Txn): Record<Column, string | number> {
     Amount: txn.amount,
     Type: txn.expense_type ?? 'Unassigned',
     Category: txn.category_name ?? 'Uncategorized',
-    Card: txn.card_name
+    Card: txn.card_name,
+    Cardholder: txn.cardholder ?? ''
   }
 }
 
 export function buildCsv(rows: Txn[]): string {
+  const columns = exportColumns(rows)
   return Papa.unparse({
-    fields: [...COLUMNS],
+    fields: [...columns],
     data: rows.map((txn) => {
       const record = toRecord(txn)
-      return COLUMNS.map((column) => record[column])
+      return columns.map((column) => record[column])
     })
   })
 }
 
 export function buildXlsx(rows: Txn[]): Buffer {
-  const sheet = XLSX.utils.json_to_sheet(rows.map(toRecord), { header: [...COLUMNS] })
+  const columns = exportColumns(rows)
+  const sheet = XLSX.utils.json_to_sheet(
+    rows.map((txn) => {
+      const record = toRecord(txn)
+      return Object.fromEntries(columns.map((column) => [column, record[column]]))
+    }),
+    { header: [...columns] }
+  )
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, sheet, 'Transactions')
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer

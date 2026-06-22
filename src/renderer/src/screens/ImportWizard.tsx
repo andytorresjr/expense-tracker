@@ -18,21 +18,9 @@ const EMPTY_MAPPING: ColumnMapping = {
   amount_col: '',
   amount_col_secondary: null,
   description_col: '',
+  cardholder_col: null,
   date_format: 'auto',
   amount_sign: 'expense_positive'
-}
-
-function guessMapping(headers: string[]): ColumnMapping {
-  const find = (...needles: string[]): string =>
-    headers.find((h) => needles.some((n) => h.toLowerCase().includes(n))) ?? ''
-  return {
-    date_col: find('transaction date', 'date'),
-    amount_col: find('amount', 'debit', 'charge'),
-    amount_col_secondary: find('credit') || null,
-    description_col: find('description', 'merchant', 'payee', 'name'),
-    date_format: 'auto',
-    amount_sign: 'expense_positive'
-  }
 }
 
 function TypePill({ value, onToggle }: { value: ExpenseType | null; onToggle?: () => void }): React.JSX.Element {
@@ -97,7 +85,7 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
       const file = await api.import.pickFile()
       if (!file) return
       setParsed(file)
-      setMapping(guessMapping(file.headers))
+      setMapping(file.suggestedMapping)
       setStep(1)
     })
 
@@ -111,6 +99,11 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
           amount_col: profile.amount_col,
           amount_col_secondary: profile.amount_col_secondary,
           description_col: profile.description_col,
+          // Only restore a saved cardholder column if this file still has it.
+          cardholder_col:
+            profile.cardholder_col && parsed.headers.includes(profile.cardholder_col)
+              ? profile.cardholder_col
+              : null,
           date_format: profile.date_format ?? 'auto',
           amount_sign: profile.amount_sign
         })
@@ -167,14 +160,19 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
   const commit = (): Promise<void> =>
     run(async () => {
       if (!parsed || !cardId || !preview) return
+      // Pass every readable row (duplicates included). commitImport dedupes by
+      // multiplicity — it skips only as many copies of each charge as the DB
+      // already holds — so handing it the full set is what lets a re-import that
+      // adds new occurrences of a repeated charge insert exactly the new ones.
       const rows = preview.rows
-        .filter((r) => !r.error && !r.duplicate)
+        .filter((r) => !r.error)
         .map((r) => ({
           txn_date: r.txn_date!,
           description: r.description,
           amount: r.amount!,
           expense_type: effectiveType(r.index, r.expense_type),
-          category_id: r.category_id
+          category_id: r.category_id,
+          cardholder: r.cardholder
         }))
       const res = await api.import.commit(cardId, parsed.filename, rows)
       await api.profiles.save(cardId, mapping)
@@ -340,7 +338,8 @@ export default function ImportWizard({ onDone }: { onDone: () => void }): React.
                 ['date_col', 'Date column', false],
                 ['amount_col', 'Amount column', false],
                 ['description_col', 'Description column', false],
-                ['amount_col_secondary', 'Credit / refund column (optional)', true]
+                ['amount_col_secondary', 'Credit / refund column (optional)', true],
+                ['cardholder_col', 'Cardholder column (optional)', true]
               ] as const
             ).map(([key, label, optional]) => (
               <label key={key} className="text-sm text-slate-600">

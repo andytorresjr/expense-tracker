@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { Txn, TxnFilters } from '@shared/types'
+import type { CardholderSpend, Txn, TxnFilters } from '@shared/types'
 
 /** SQL sort expressions shared by the paginated list and the export fetch. */
 export const TXN_SORT_EXPRESSIONS: Record<NonNullable<TxnFilters['sortBy']>, string> = {
@@ -7,7 +7,8 @@ export const TXN_SORT_EXPRESSIONS: Record<NonNullable<TxnFilters['sortBy']>, str
   description: 'UPPER(t.description)',
   amount: 't.amount',
   expense_type: "COALESCE(t.expense_type, '')",
-  category_name: "UPPER(COALESCE(c.name, 'Uncategorized'))"
+  category_name: "UPPER(COALESCE(c.name, 'Uncategorized'))",
+  cardholder: "UPPER(COALESCE(t.cardholder, ''))"
 }
 
 export function buildTxnWhere(filters: TxnFilters): { where: string; params: Record<string, unknown> } {
@@ -76,4 +77,21 @@ export function fetchTransactionsForExport(db: Database.Database, filters: TxnFi
        ${where} ORDER BY ${TXN_SORT_EXPRESSIONS[sortBy]} ${sortDir}, t.id DESC`
     )
     .all(params) as Txn[]
+}
+
+/**
+ * Total net spend per individual cardholder for the given filters, biggest
+ * spender first. Only rows that carry a cardholder name are counted; the amount
+ * is summed raw (positive spend minus any refunds), mirroring the table totals.
+ */
+export function fetchCardholderSpend(db: Database.Database, filters: TxnFilters): CardholderSpend[] {
+  const { where, params } = buildTxnWhere(filters)
+  const scoped = appendWhere(where, "TRIM(COALESCE(t.cardholder, '')) <> ''")
+  return db
+    .prepare(
+      `SELECT t.cardholder AS cardholder, SUM(t.amount) AS total, COUNT(*) AS count
+       FROM transactions t
+       ${scoped} GROUP BY t.cardholder ORDER BY total DESC, count DESC`
+    )
+    .all(params) as CardholderSpend[]
 }

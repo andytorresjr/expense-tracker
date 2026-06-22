@@ -46,6 +46,8 @@ export interface Txn {
   category_id: number | null
   category_locked: 0 | 1
   import_batch_id: number | null
+  /** Name of the individual cardholder who made the charge, when the statement carries it. */
+  cardholder: string | null
   card_name: string
   category_name: string | null
 }
@@ -58,6 +60,7 @@ export interface ImportProfile {
   amount_col: string
   description_col: string
   amount_col_secondary: string | null
+  cardholder_col: string | null
   date_format: string
   amount_sign: AmountSign
 }
@@ -67,6 +70,8 @@ export interface ColumnMapping {
   amount_col: string
   amount_col_secondary: string | null
   description_col: string
+  /** Optional column naming the individual cardholder (e.g. Amex card member). */
+  cardholder_col: string | null
   date_format: string // 'auto' | 'MM/DD/YYYY' | 'DD/MM/YYYY' | 'YYYY-MM-DD'
   amount_sign: AmountSign
 }
@@ -77,6 +82,8 @@ export interface ParsedFile {
   headers: string[]
   rows: Record<string, string>[]
   rowCount: number
+  /** Best-guess column mapping from header names and cell content. */
+  suggestedMapping: ColumnMapping
 }
 
 export interface PreviewRow {
@@ -89,6 +96,7 @@ export interface PreviewRow {
   needsReview: boolean
   category_id: number | null
   category_name: string | null
+  cardholder: string | null
   duplicate: boolean
   error: string | null
 }
@@ -106,6 +114,7 @@ export interface CommitRow {
   amount: number
   expense_type: ExpenseType | null
   category_id: number | null
+  cardholder: string | null
 }
 
 export interface ImportResult {
@@ -164,10 +173,17 @@ export interface TxnFilters {
   search?: string
   dateFrom?: string
   dateTo?: string
-  sortBy?: 'txn_date' | 'amount' | 'description' | 'expense_type' | 'category_name'
+  sortBy?: 'txn_date' | 'amount' | 'description' | 'expense_type' | 'category_name' | 'cardholder'
   sortDir?: 'asc' | 'desc'
   page?: number
   pageSize?: number
+}
+
+/** Total spend per individual cardholder, used to surface the biggest spenders. */
+export interface CardholderSpend {
+  cardholder: string
+  total: number
+  count: number
 }
 
 export interface TxnPage {

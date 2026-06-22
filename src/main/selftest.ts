@@ -12,7 +12,7 @@ import { initDb, closeDb } from './db'
 import { buildPreview, commitImport, detectHeaderRow, parseAmount, parseFile } from './importer'
 import { rerunRules } from './rules'
 import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
-import { fetchTransactionsForExport } from './query'
+import { fetchCardholderSpend, fetchTransactionsForExport } from './query'
 import { buildCsv, buildExportFileName, buildXlsx } from './export'
 import type { Card, ColumnMapping, CommitRow, ExpenseType } from '@shared/types'
 
@@ -76,6 +76,7 @@ export async function runSelfTest(): Promise<number> {
     amount_col: 'Amount',
     amount_col_secondary: null,
     description_col: 'Description',
+    cardholder_col: null,
     date_format: 'MM/DD/YYYY',
     amount_sign: 'expense_negative'
   }
@@ -100,7 +101,8 @@ export async function runSelfTest(): Promise<number> {
       description: r.description,
       amount: r.amount!,
       expense_type: r.expense_type,
-      category_id: r.category_id
+      category_id: r.category_id,
+      cardholder: r.cardholder
     }))
   const first = commitImport(db, card.id, chase.filename, toCommit)
   check('first import inserted 8', first.inserted === 8, `inserted ${first.inserted}, skipped ${first.skipped}`)
@@ -119,6 +121,7 @@ export async function runSelfTest(): Promise<number> {
     amount_col: 'Debit',
     amount_col_secondary: 'Credit',
     description_col: 'Merchant',
+    cardholder_col: null,
     date_format: 'auto',
     amount_sign: 'expense_positive'
   }
@@ -136,7 +139,8 @@ export async function runSelfTest(): Promise<number> {
       description: r.description,
       amount: r.amount!,
       expense_type: r.expense_type,
-      category_id: r.category_id
+      category_id: r.category_id,
+      cardholder: r.cardholder
     }))
   )
   check('bank rows inserted', bankCommit.inserted === bank.rowCount, `inserted ${bankCommit.inserted} of ${bank.rowCount}`)
@@ -162,6 +166,7 @@ export async function runSelfTest(): Promise<number> {
     amount_col: 'Debit',
     amount_col_secondary: 'Credit',
     description_col: 'Description',
+    cardholder_col: null,
     date_format: 'auto',
     amount_sign: 'expense_positive'
   }
@@ -182,7 +187,8 @@ export async function runSelfTest(): Promise<number> {
       description: r.description,
       amount: r.amount!,
       expense_type: r.expense_type,
-      category_id: r.category_id
+      category_id: r.category_id,
+      cardholder: r.cardholder
     }))
   const pdfFirst = commitImport(db, pdfCard.id, pdf.filename, pdfCommitRows)
   check('pdf commit inserted all rows', pdfFirst.inserted === pdf.rowCount, `inserted ${pdfFirst.inserted}`)
@@ -214,6 +220,7 @@ export async function runSelfTest(): Promise<number> {
     amount_col: 'Amount',
     amount_col_secondary: null,
     description_col: 'Description',
+    cardholder_col: null,
     date_format: 'auto',
     amount_sign: 'expense_positive'
   })
@@ -338,6 +345,120 @@ export async function runSelfTest(): Promise<number> {
   check('amex: negative amount preserved through parse', amexCredit?.Amount === '-7.00', `got ${amexCredit?.Amount}`)
   if (existsSync(amexPath)) unlinkSync(amexPath)
 
+  // Headerless export (Amex "Transaction Details" .xlsx): data starts at row 0,
+  // with extra columns (card member, card last-4, verbose detail, ref #, category)
+  // around the date/merchant/amount we care about. No header row exists.
+  const headerless: string[][] = [
+    ['05/30/2026', 'BEST BUY LAREDO TX', 'ADOLFO CAMPERO', '-03003', '$43.28', '006001634 ELEC SLS', 'Electronics'],
+    ['05/30/2026', 'WHATABURGER SAN ANTONIO TX', 'ADOLFO CAMPERO', '-03003', '$25.00', 'DGC7622148 FOOD', 'Restaurant'],
+    ['05/29/2026', 'HOTELS.COM WA', 'LIZA CAMPERO', '-03003', '$48.08', '404FFHQ TRAVEL', 'Travel'],
+    ['05/28/2026', 'AMAZON MARKETPLACE WA', 'LIZA CAMPERO', '-03003', '$49.71', '190QDN MERCHANDISE', 'Internet']
+  ]
+  check('detectHeaderRow: headerless data grid → -1', detectHeaderRow(headerless) === -1, `got ${detectHeaderRow(headerless)}`)
+
+  const headerlessPath = join(app.getPath('userData'), 'selftest-headerless.xlsx')
+  const wb2 = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(headerless), 'Transaction Details')
+  XLSX.writeFile(wb2, headerlessPath)
+  const headerlessFile = await parseFile(headerlessPath)
+  check('headerless: no transaction consumed as header (4 rows)', headerlessFile.rowCount === 4, `got ${headerlessFile.rowCount}`)
+  check('headerless: synthetic Column N headers', headerlessFile.headers[0] === 'Column 1' && headerlessFile.headers.length === 7)
+  const hm = headerlessFile.suggestedMapping
+  const firstRow = headerlessFile.rows[0]
+  check('headerless: date column suggested by content', firstRow[hm.date_col] === '05/30/2026', `date_col=${hm.date_col}`)
+  check('headerless: amount column is the currency-shaped one, not the card #', firstRow[hm.amount_col] === '$43.28', `amount_col=${hm.amount_col}`)
+  check('headerless: description column is the merchant, not the detail/ref', firstRow[hm.description_col] === 'BEST BUY LAREDO TX', `description_col=${hm.description_col}`)
+  const headerlessPreview = buildPreview(db, card, headerlessFile.rows, hm)
+  check('headerless: preview parses every row cleanly', headerlessPreview.errorCount === 0, JSON.stringify(headerlessPreview.rows.filter((r) => r.error)))
+  if (existsSync(headerlessPath)) unlinkSync(headerlessPath)
+
+  console.log('\n[8b] Repeated identical charges (multiplicity dedup)')
+  db.prepare("INSERT INTO cards (name) VALUES ('Repeat Charges Visa')").run()
+  const repeatCard = db.prepare("SELECT * FROM cards WHERE name = 'Repeat Charges Visa'").get() as Card
+  const repeatMapping: ColumnMapping = {
+    date_col: 'Date',
+    amount_col: 'Amount',
+    amount_col_secondary: null,
+    description_col: 'Description',
+    cardholder_col: null,
+    date_format: 'auto',
+    amount_sign: 'expense_positive'
+  }
+  const fees = (n: number): Record<string, string>[] =>
+    Array.from({ length: n }, () => ({ Date: '2026-05-05', Description: 'TEXAS.GOV*SERVICEFEEAUSTIN TX', Amount: '2.00' }))
+  const toCommitRows = (p: ReturnType<typeof buildPreview>): CommitRow[] =>
+    p.rows
+      .filter((r) => !r.error)
+      .map((r) => ({
+        txn_date: r.txn_date!,
+        description: r.description,
+        amount: r.amount!,
+        expense_type: r.expense_type,
+        category_id: r.category_id,
+        cardholder: r.cardholder
+      }))
+
+  const feePreview = buildPreview(db, repeatCard, fees(6), repeatMapping)
+  check('repeat: 6 identical charges all new on first import', feePreview.newCount === 6 && feePreview.duplicateCount === 0, `new ${feePreview.newCount}, dup ${feePreview.duplicateCount}`)
+  const feeCommit = commitImport(db, repeatCard.id, 'fees.csv', toCommitRows(feePreview))
+  check('repeat: all 6 inserted', feeCommit.inserted === 6, `inserted ${feeCommit.inserted}`)
+
+  const reFeePreview = buildPreview(db, repeatCard, fees(6), repeatMapping)
+  check('repeat: re-importing the same statement flags all 6 duplicate', reFeePreview.newCount === 0 && reFeePreview.duplicateCount === 6)
+  const reFeeCommit = commitImport(db, repeatCard.id, 'fees.csv', toCommitRows(reFeePreview))
+  check('repeat: re-import inserts 0, skips 6', reFeeCommit.inserted === 0 && reFeeCommit.skipped === 6, `inserted ${reFeeCommit.inserted}, skipped ${reFeeCommit.skipped}`)
+
+  const topUpPreview = buildPreview(db, repeatCard, fees(8), repeatMapping)
+  check('repeat: a statement with 8 occurrences tops up by 2', topUpPreview.newCount === 2 && topUpPreview.duplicateCount === 6, `new ${topUpPreview.newCount}, dup ${topUpPreview.duplicateCount}`)
+  const topUpCommit = commitImport(db, repeatCard.id, 'fees-2.csv', toCommitRows(topUpPreview))
+  check('repeat: top-up inserts exactly 2', topUpCommit.inserted === 2 && topUpCommit.skipped === 6, `inserted ${topUpCommit.inserted}`)
+  const repeatTotal = db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE card_id = ?').get(repeatCard.id) as { n: number }
+  check('repeat: 8 charges stored in total after top-up', repeatTotal.n === 8, `got ${repeatTotal.n}`)
+
+  console.log('\n[8c] Cardholder detection + spend breakdown')
+  // A statement without a person-name column must not get a cardholder mapping.
+  const chaseSuggest = (await parseFile(join(app.getAppPath(), 'samples', 'sample-chase.csv'))).suggestedMapping
+  check('cardholder: none detected when no name column exists', chaseSuggest.cardholder_col === null, `got ${chaseSuggest.cardholder_col}`)
+
+  // A headerless Amex-style grid where the card-member column (index 2, right
+  // after the merchant) repeats a small set of names. The trailing "UNITED STATES"
+  // country column is also name-shaped with an even lower distinct ratio — the
+  // detector must still pick the card member by its proximity to the description.
+  const cardholderAoa: string[][] = [
+    ['05/30/2026', 'BEST BUY LAREDO TX', 'ADOLFO CAMPERO', '-03003', '$100.00', 'Electronics', 'UNITED STATES'],
+    ['05/29/2026', 'HOTELS.COM WA', 'ADOLFO CAMPERO', '-03003', '$100.00', 'Travel', 'UNITED STATES'],
+    ['05/28/2026', 'SHELL OIL TX', 'ADOLFO CAMPERO', '-03003', '$50.00', 'Fuel', 'UNITED STATES'],
+    ['05/27/2026', 'WHATABURGER TX', 'ADOLFO CAMPERO', '-03003', '$50.00', 'Restaurant', 'UNITED STATES'],
+    ['05/26/2026', 'AMAZON WA', 'LIZA CAMPERO', '-03003', '$40.00', 'Internet', 'UNITED STATES'],
+    ['05/25/2026', 'TARGET TX', 'LIZA CAMPERO', '-03003', '$30.00', 'Retail', 'UNITED STATES'],
+    ['05/24/2026', 'COSTCO TX', 'JOHN T HALL', '-03003', '$25.00', 'Wholesale', 'UNITED STATES'],
+    ['05/23/2026', 'UBER SF', 'JOHN T HALL', '-03003', '$15.00', 'Travel', 'UNITED STATES']
+  ]
+  const cardholderPath = join(app.getPath('userData'), 'selftest-cardholder.xlsx')
+  const wb3 = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb3, XLSX.utils.aoa_to_sheet(cardholderAoa), 'Transaction Details')
+  XLSX.writeFile(wb3, cardholderPath)
+  const chFile = await parseFile(cardholderPath)
+  const cm = chFile.suggestedMapping
+  check('cardholder: detects the card-member column by content', !!cm.cardholder_col && chFile.rows[0][cm.cardholder_col] === 'ADOLFO CAMPERO', `cardholder_col=${cm.cardholder_col}`)
+  check('cardholder: description stays the merchant, not the name', chFile.rows[0][cm.description_col] === 'BEST BUY LAREDO TX', `description_col=${cm.description_col}`)
+
+  db.prepare("INSERT INTO cards (name) VALUES ('Cardholder Visa')").run()
+  const chCard = db.prepare("SELECT * FROM cards WHERE name = 'Cardholder Visa'").get() as Card
+  const chPreview = buildPreview(db, chCard, chFile.rows, cm)
+  check('cardholder: preview carries the cardholder name', chPreview.rows[0].cardholder === 'ADOLFO CAMPERO', `got ${chPreview.rows[0].cardholder}`)
+  const chCommit = commitImport(db, chCard.id, 'cardholders.xlsx', toCommitRows(chPreview))
+  check('cardholder: all 8 rows committed', chCommit.inserted === 8, `inserted ${chCommit.inserted}`)
+  const storedCardholder = db.prepare('SELECT cardholder FROM transactions WHERE card_id = ? ORDER BY txn_date DESC LIMIT 1').get(chCard.id) as { cardholder: string | null }
+  check('cardholder: stored on the transaction row', storedCardholder.cardholder === 'ADOLFO CAMPERO', `got ${storedCardholder.cardholder}`)
+
+  const spend = fetchCardholderSpend(db, { cardId: chCard.id })
+  check('cardholder: spend grouped into 3 people', spend.length === 3, `got ${spend.length}`)
+  check('cardholder: biggest spender is ADOLFO CAMPERO at $300', spend[0].cardholder === 'ADOLFO CAMPERO' && Math.abs(spend[0].total - 300) < 0.01, JSON.stringify(spend[0]))
+  check('cardholder: top spender shows 4 transactions', spend[0].count === 4, `got ${spend[0].count}`)
+  check('cardholder: results ordered by spend descending', spend.map((s) => s.total).join(',') === '300,70,40', spend.map((s) => `${s.cardholder}:${s.total}`).join(' '))
+  if (existsSync(cardholderPath)) unlinkSync(cardholderPath)
+
   console.log('\n[9] Quick-categorize queue ordering (uncategorized first)')
   const queue = db
     .prepare(
@@ -371,14 +492,16 @@ export async function runSelfTest(): Promise<number> {
       description: 'SELFTEST CLEANUP JANUARY',
       amount: 10,
       expense_type: 'business',
-      category_id: null
+      category_id: null,
+      cardholder: null
     },
     {
       txn_date: '2024-02-15',
       description: 'SELFTEST CLEANUP FEBRUARY',
       amount: 20,
       expense_type: 'business',
-      category_id: null
+      category_id: null,
+      cardholder: null
     }
   ]
   const cleanupBatch = commitImport(db, card.id, 'selftest-cleanup.csv', cleanupRows)
@@ -413,9 +536,9 @@ export async function runSelfTest(): Promise<number> {
   db.prepare("INSERT INTO cards (name) VALUES ('Export Test Card')").run()
   const exportCard = db.prepare("SELECT * FROM cards WHERE name = 'Export Test Card'").get() as Card
   const exportRows: CommitRow[] = [
-    { txn_date: '2026-03-01', description: 'DINING ONE', amount: 25, expense_type: 'business', category_id: mealsId },
-    { txn_date: '2026-03-02', description: 'DINING TWO', amount: 40, expense_type: 'personal', category_id: mealsId },
-    { txn_date: '2026-03-03', description: 'TRAVEL ONE', amount: 100, expense_type: 'business', category_id: travelId }
+    { txn_date: '2026-03-01', description: 'DINING ONE', amount: 25, expense_type: 'business', category_id: mealsId, cardholder: null },
+    { txn_date: '2026-03-02', description: 'DINING TWO', amount: 40, expense_type: 'personal', category_id: mealsId, cardholder: null },
+    { txn_date: '2026-03-03', description: 'TRAVEL ONE', amount: 100, expense_type: 'business', category_id: travelId, cardholder: null }
   ]
   commitImport(db, exportCard.id, 'export-test.csv', exportRows)
   const allExport = fetchTransactionsForExport(db, { expenseType: 'all', cardId: exportCard.id })
