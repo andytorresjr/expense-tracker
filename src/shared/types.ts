@@ -206,6 +206,7 @@ export interface Kpis {
   byCategory: { category: string; color: string | null; total: number }[]
   monthlyTrend: { month: string; total: number }[]
   topVendors: { vendor: string; total: number; count: number }[]
+  byCardholder: CardholderSpend[]
   budgetVsActual: { category: string; limit: number; actual: number }[]
   uncategorizedCount: number
 }

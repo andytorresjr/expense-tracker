@@ -144,6 +144,25 @@ export default function PrintableDashboard({
         )}
       </Section>
 
+      {kpis.byCardholder.length > 0 && (
+        <Section title="Spending by cardholder">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+            <tbody>
+              {kpis.byCardholder.map((c, i) => (
+                <tr key={c.cardholder}>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '4px 6px 4px 0' }}>
+                    {i + 1}. {c.cardholder}
+                    {i === 0 && <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: '#b45309' }}>Top spender</span>}
+                  </td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '4px 6px', textAlign: 'right', color: '#777', whiteSpace: 'nowrap' }}>{c.count}×</td>
+                  <td style={{ borderBottom: '1px solid #eee', padding: '4px 0', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtMoney(c.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
+
       {kpis.budgetVsActual.length > 0 && (
         <Section title="Budget vs. actual">
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>

@@ -193,6 +193,40 @@ export default function Dashboard(): React.JSX.Element {
             </StatCard>
           </div>
 
+          {kpis.byCardholder.length > 0 && (
+            <StatCard title="Spending by cardholder">
+              <ol className="space-y-2">
+                {kpis.byCardholder.map((c, i) => {
+                  const top = kpis.byCardholder[0].total
+                  const width = top > 0 ? Math.max(0, (c.total / top) * 100) : 0
+                  return (
+                    <li key={c.cardholder} className="flex items-center gap-3 text-sm">
+                      <span className="w-5 text-right text-xs text-slate-400">{i + 1}</span>
+                      <span className="w-52 shrink-0 truncate font-medium text-slate-700" title={c.cardholder}>
+                        {c.cardholder}
+                        {i === 0 && (
+                          <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 align-middle">
+                            Top spender
+                          </span>
+                        )}
+                      </span>
+                      <span className="relative flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                        <span
+                          className={`absolute inset-y-0 left-0 rounded-full ${i === 0 ? 'bg-amber-400' : 'bg-blue-400'}`}
+                          style={{ width: `${width}%` }}
+                        />
+                      </span>
+                      <span className="w-28 text-right font-semibold text-slate-800 tabular-nums">{fmtMoney(c.total)}</span>
+                      <span className="w-20 text-right text-xs text-slate-400">
+                        {c.count} txn{c.count === 1 ? '' : 's'}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ol>
+            </StatCard>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <StatCard title="Spend by category">
               {kpis.byCategory.length === 0 ? (

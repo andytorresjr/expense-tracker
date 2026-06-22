@@ -13,6 +13,7 @@ import { buildPreview, commitImport, detectHeaderRow, parseAmount, parseFile } f
 import { rerunRules } from './rules'
 import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
 import { fetchCardholderSpend, fetchTransactionsForExport } from './query'
+import { getKpis } from './ipc'
 import { buildCsv, buildExportFileName, buildXlsx } from './export'
 import type { Card, ColumnMapping, CommitRow, ExpenseType } from '@shared/types'
 
@@ -457,6 +458,11 @@ export async function runSelfTest(): Promise<number> {
   check('cardholder: biggest spender is ADOLFO CAMPERO at $300', spend[0].cardholder === 'ADOLFO CAMPERO' && Math.abs(spend[0].total - 300) < 0.01, JSON.stringify(spend[0]))
   check('cardholder: top spender shows 4 transactions', spend[0].count === 4, `got ${spend[0].count}`)
   check('cardholder: results ordered by spend descending', spend.map((s) => s.total).join(',') === '300,70,40', spend.map((s) => `${s.cardholder}:${s.total}`).join(' '))
+
+  // The dashboard surfaces the same breakdown via getKpis, scoped to its date range.
+  const chKpis = getKpis(db, { expenseType: 'all', dateFrom: '2026-05-01', dateTo: '2026-05-31' })
+  check('dashboard: KPIs expose byCardholder', chKpis.byCardholder.length === 3, `got ${chKpis.byCardholder.length}`)
+  check('dashboard: top spender is ADOLFO CAMPERO at $300', chKpis.byCardholder[0]?.cardholder === 'ADOLFO CAMPERO' && Math.abs(chKpis.byCardholder[0].total - 300) < 0.01, JSON.stringify(chKpis.byCardholder[0]))
   if (existsSync(cardholderPath)) unlinkSync(cardholderPath)
 
   console.log('\n[9] Quick-categorize queue ordering (uncategorized first)')

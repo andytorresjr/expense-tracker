@@ -65,7 +65,7 @@ function handle<T>(channel: string, fn: (payload: never) => T | Promise<T>): voi
   })
 }
 
-function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
+export function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
   const { where, params } = buildTxnWhere(filters)
   const spendWhere = appendWhere(where, REPORTABLE_SPEND_CATEGORY_SQL)
   const incomeWhere = appendWhere(where, INCOME_CATEGORY_SQL)
@@ -130,6 +130,17 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
     )
     .all(params) as Kpis['topVendors']
 
+  // Who's spending the most — net reportable spend per cardholder, biggest first.
+  // Only present for statements that carry a cardholder column.
+  const byCardholder = db
+    .prepare(
+      `SELECT t.cardholder AS cardholder, SUM(t.amount) AS total, COUNT(*) AS count
+       FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+       ${appendWhere(spendWhere, "TRIM(COALESCE(t.cardholder, '')) <> ''")}
+       GROUP BY t.cardholder HAVING SUM(t.amount) > 0 ORDER BY total DESC, count DESC LIMIT 10`
+    )
+    .all(params) as Kpis['byCardholder']
+
   let budgetVsActual: Kpis['budgetVsActual'] = []
   if (filters.expenseType === 'business' || filters.expenseType === 'personal') {
     budgetVsActual = db
@@ -158,6 +169,7 @@ function getKpis(db: Database.Database, filters: KpiFilters): Kpis {
     byCategory,
     monthlyTrend,
     topVendors,
+    byCardholder,
     budgetVsActual,
     uncategorizedCount
   }
