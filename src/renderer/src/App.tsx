@@ -5,11 +5,12 @@ import Transactions from './screens/Transactions'
 import CategoriesRules from './screens/CategoriesRules'
 import Dashboard from './screens/Dashboard'
 import QuickReports from './screens/QuickReports'
+import Reconciliation from './screens/Reconciliation'
 import Settings from './screens/Settings'
 import LockScreen from './components/LockScreen'
 import { getLockConfig } from './lock'
 
-type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'reports' | 'settings'
+type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'reports' | 'reconciliation' | 'settings'
 
 const NAV: { id: Screen; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -17,6 +18,7 @@ const NAV: { id: Screen; label: string; icon: string }[] = [
   { id: 'import', label: 'Import Statement', icon: '📥' },
   { id: 'categories', label: 'Categories & Rules', icon: '🏷️' },
   { id: 'reports', label: 'Quick Reports', icon: '⚡' },
+  { id: 'reconciliation', label: 'PO Matching', icon: '🔗' },
   { id: 'settings', label: 'Settings', icon: '⚙️' }
 ]
 
@@ -165,6 +167,7 @@ export default function App(): React.JSX.Element {
             {screen === 'dashboard' && <Dashboard />}
             {screen === 'categories' && <CategoriesRules />}
             {screen === 'reports' && <QuickReports />}
+            {screen === 'reconciliation' && <Reconciliation />}
             {screen === 'settings' && <Settings />}
           </main>
         </div>

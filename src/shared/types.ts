@@ -212,3 +212,157 @@ export interface Kpis {
 }
 
 export type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string }
+
+// ---- Reconciliation: matching statement charges to PO Automation records ----
+
+/** One purchase-order line as returned by the PO Automation read-only API. */
+export interface PoLineLite {
+  description: string
+  qty: number
+  rate: number
+  amount: number
+}
+
+/** A purchase order pulled from `GET /api/reconciliation/orders` on the PO app. */
+export interface PoApiOrder {
+  id: string
+  poNumber: number
+  date: string // ISO
+  vendor: string
+  vendorAddress: string | null
+  shipToName: string
+  subtotal: number
+  salesTax: number
+  total: number
+  status: string
+  isChargeback: boolean
+  chargebackClient: string | null
+  chargebackSettledAt: string | null
+  requester: { name: string; email: string } | null
+  createdBy: { name: string; email: string }
+  lines: PoLineLite[]
+}
+
+/** Reconciliation settings surfaced to the renderer. The API token is NEVER
+ *  included — only whether one is stored. */
+export interface ReconConfig {
+  baseUrl: string
+  hasToken: boolean
+  /** Match window: how many days BEFORE the PO date a charge may appear. */
+  dateBeforeDays: number
+  /** Match window: how many days AFTER the PO date a charge may appear. */
+  dateAfterDays: number
+  /** Amount difference (in cents) treated as an exact, auto-linkable match. */
+  amountExactCents: number
+  /** Amount difference (as a %) still offered as a review candidate. */
+  amountBandPct: number
+  /** Vendors that SHOULD have a PO; only these are flagged when a charge has none. */
+  trackedVendors: string[]
+  lastSyncAt: string | null
+  lastSyncCount: number | null
+}
+
+/** Partial update; `token: null` clears the stored token, `undefined` leaves it. */
+export interface ReconConfigInput {
+  baseUrl?: string
+  token?: string | null
+  dateBeforeDays?: number
+  dateAfterDays?: number
+  amountExactCents?: number
+  amountBandPct?: number
+  trackedVendors?: string[]
+}
+
+export interface ReconTestResult {
+  ok: boolean
+  status: number
+  message: string
+  sampleCount?: number
+}
+
+export interface ReconSyncResult {
+  fetched: number
+  upserted: number
+  syncedAt: string
+}
+
+export type ReconLinkStatus = 'auto' | 'pending' | 'confirmed' | 'rejected'
+
+/** Summary returned after (re)running the matcher. */
+export interface ReconMatchResult {
+  autoLinked: number
+  queued: number
+  candidatesWritten: number
+  chargesConsidered: number
+  posConsidered: number
+}
+
+/** A candidate PO offered for a charge in the review queue. */
+export interface ReconCandidate {
+  linkId: number
+  poId: string
+  poNumber: number
+  poDate: string
+  vendor: string
+  total: number
+  requesterName: string | null
+  status: ReconLinkStatus
+  confidence: number
+  lines: PoLineLite[]
+}
+
+/** A charge plus its ranked candidate POs awaiting the boss's decision. */
+export interface ReconReviewItem {
+  txnId: number
+  txnDate: string
+  description: string
+  amount: number
+  cardName: string
+  candidates: ReconCandidate[]
+}
+
+export interface ReconUnmatchedCharge {
+  txnId: number
+  txnDate: string
+  description: string
+  amount: number
+  cardName: string
+}
+
+/** Reconciliation status of a single PO against the statement. */
+export type ReconPoStatus = 'matched' | 'review' | 'unmatched'
+
+/** One PO in the reconciliation ledger, with how it lines up to the statement. */
+export interface ReconLedgerItem {
+  poId: string
+  poNumber: number
+  poDate: string
+  vendor: string
+  total: number
+  requesterName: string | null
+  status: ReconPoStatus
+  /** When matched: the statement charge it's tied to. */
+  matchedTxnId: number | null
+  matchedTxnDate: string | null
+  matchedDescription: string | null
+  matchedAmount: number | null
+  /** Whether the match was auto-linked or boss-confirmed (when matched). */
+  linkStatus: ReconLinkStatus | null
+  /** Number of pending candidates (when status is 'review'). */
+  reviewCount: number
+}
+
+export interface ReconSummary {
+  totalPos: number
+  matchedPos: number
+  reviewPos: number
+  unmatchedPos: number
+  /** Sum of matched POs' totals. */
+  amountReconciled: number
+}
+
+/** PO-centric reconciliation view: every PO and its statement status. */
+export interface ReconLedger {
+  summary: ReconSummary
+  items: ReconLedgerItem[]
+}

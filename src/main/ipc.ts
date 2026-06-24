@@ -9,6 +9,8 @@ import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
 import { appendWhere, buildTxnWhere, fetchCardholderSpend, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
 import { buildCsv, buildDashboardFileName, buildExportFileName, buildReportFileName, buildXlsx } from './export'
 import { checkForUpdates } from './updater'
+import { getReconConfig, setReconConfig, syncPurchaseOrders, testReconConnection } from './reconcile'
+import { confirmLink, getLedger, getReviewQueue, getUnmatchedCharges, rejectLink, runMatch } from './matcher'
 import type {
   Card,
   Category,
@@ -21,6 +23,7 @@ import type {
   IpcResult,
   KpiFilters,
   Kpis,
+  ReconConfigInput,
   TransactionClearRequest,
   TxnFilters
 } from '@shared/types'
@@ -466,6 +469,18 @@ export function registerIpcHandlers(): void {
     initDb(dbPath)
     return basename(result.filePaths[0])
   })
+
+  // ---- reconciliation (PO matching) ----
+  handle('recon.getConfig', () => getReconConfig())
+  handle('recon.setConfig', (p: ReconConfigInput) => setReconConfig(p))
+  handle('recon.testConnection', () => testReconConnection())
+  handle('recon.sync', () => syncPurchaseOrders())
+  handle('recon.match', () => runMatch(getDb()))
+  handle('recon.queue', () => getReviewQueue(getDb()))
+  handle('recon.confirm', (p: { linkId: number }) => confirmLink(getDb(), p.linkId))
+  handle('recon.reject', (p: { linkId: number }) => rejectLink(getDb(), p.linkId))
+  handle('recon.ledger', () => getLedger(getDb()))
+  handle('recon.unmatchedCharges', () => getUnmatchedCharges(getDb()))
 
   // app metadata
   handle('app.version', () => app.getVersion())

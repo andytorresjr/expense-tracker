@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useLock } from '../App'
 import CardsSection from '../components/CardsSection'
+import type { ReconConfig, ReconConfigInput } from '@shared/types'
 import {
   clearPin,
   getLockConfig,
@@ -180,6 +181,185 @@ function ScreenLockSection(): React.JSX.Element {
   )
 }
 
+function ReconciliationSettings(): React.JSX.Element {
+  const [cfg, setCfg] = useState<ReconConfig | null>(null)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [before, setBefore] = useState('1')
+  const [after, setAfter] = useState('7')
+  const [exactCents, setExactCents] = useState('2')
+  const [bandPct, setBandPct] = useState('5')
+  const [vendors, setVendors] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+
+  const apply = (c: ReconConfig): void => {
+    setCfg(c)
+    setBaseUrl(c.baseUrl)
+    setBefore(String(c.dateBeforeDays))
+    setAfter(String(c.dateAfterDays))
+    setExactCents(String(c.amountExactCents))
+    setBandPct(String(c.amountBandPct))
+    setVendors(c.trackedVendors.join(', '))
+  }
+
+  useEffect(() => {
+    api.recon.getConfig().then(apply).catch(() => {})
+  }, [])
+
+  // Persist the form (token only when the user typed a new one) and return the saved config.
+  const persist = async (): Promise<ReconConfig> => {
+    const input: ReconConfigInput = {
+      baseUrl,
+      dateBeforeDays: Number(before),
+      dateAfterDays: Number(after),
+      amountExactCents: Number(exactCents),
+      amountBandPct: Number(bandPct),
+      trackedVendors: vendors.split(/[,\n]/).map((v) => v.trim()).filter(Boolean)
+    }
+    if (token.trim()) input.token = token.trim()
+    const updated = await api.recon.setConfig(input)
+    apply(updated)
+    setToken('')
+    return updated
+  }
+
+  const guard = (tag: string, fn: () => Promise<void>): (() => Promise<void>) => async () => {
+    setBusy(tag)
+    setMsg(null)
+    try {
+      await fn()
+    } catch (e) {
+      setMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const save = guard('save', async () => {
+    await persist()
+    setMsg({ tone: 'ok', text: 'Saved.' })
+  })
+
+  const test = guard('test', async () => {
+    await persist()
+    const result = await api.recon.testConnection()
+    setMsg({ tone: result.ok ? 'ok' : 'err', text: result.message })
+  })
+
+  const syncNow = guard('sync', async () => {
+    await persist()
+    const result = await api.recon.sync()
+    setMsg({ tone: 'ok', text: `Synced ${result.fetched} purchase orders.` })
+  })
+
+  const clearToken = guard('clear', async () => {
+    apply(await api.recon.setConfig({ token: null }))
+    setMsg({ tone: 'ok', text: 'Token cleared.' })
+  })
+
+  return (
+    <section className="card-panel p-6 space-y-4">
+      <div>
+        <h2 className="font-semibold text-slate-800">Purchase-order matching</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Connect to the PO Automation system to match statement charges (especially Amazon) to purchase orders. The
+          app only <span className="font-medium">downloads</span> PO records — your statement data never leaves this PC.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">PO system URL</label>
+          <input
+            className="input w-full"
+            placeholder="https://po.unimexgroup.com"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-500 mb-1">API token</label>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              autoComplete="off"
+              className="input flex-1"
+              placeholder={cfg?.hasToken ? '•••••••• saved — type to replace' : 'Paste the API token'}
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+            />
+            {cfg?.hasToken && (
+              <button className="btn-secondary" disabled={!!busy} onClick={clearToken}>
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs text-slate-500 mb-1">Tracked vendors (should have a PO)</label>
+        <input
+          className="input w-full"
+          placeholder="Amazon, Dell, Uline, Grainger"
+          value={vendors}
+          onChange={(e) => setVendors(e.target.value)}
+        />
+        <p className="text-xs text-slate-400 mt-1">
+          Comma-separated. A charge from one of these vendors with no matching PO is flagged in &ldquo;Charges with no
+          purchase order.&rdquo; Other vendors (utilities, fuel, fees) are ignored there.
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="text-xs font-medium text-slate-600 mb-2">Match tolerances</div>
+        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <label className="block">
+            <span className="block text-xs text-slate-500 mb-1">Days before PO</span>
+            <input className="input w-full !py-1.5" type="number" min={0} value={before} onChange={(e) => setBefore(e.target.value)} />
+          </label>
+          <label className="block">
+            <span className="block text-xs text-slate-500 mb-1">Days after PO</span>
+            <input className="input w-full !py-1.5" type="number" min={0} value={after} onChange={(e) => setAfter(e.target.value)} />
+          </label>
+          <label className="block">
+            <span className="block text-xs text-slate-500 mb-1">Exact within (¢)</span>
+            <input className="input w-full !py-1.5" type="number" min={0} value={exactCents} onChange={(e) => setExactCents(e.target.value)} />
+          </label>
+          <label className="block">
+            <span className="block text-xs text-slate-500 mb-1">Review band (%)</span>
+            <input className="input w-full !py-1.5" type="number" min={0} value={bandPct} onChange={(e) => setBandPct(e.target.value)} />
+          </label>
+        </div>
+        <p className="text-xs text-slate-400 mt-2">
+          A charge auto-links when its amount is within the exact cents and one PO uniquely matches in the date window;
+          amounts within the review band are offered for confirmation.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <button className="btn-primary" disabled={!!busy} onClick={save}>
+          {busy === 'save' ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn-secondary" disabled={!!busy} onClick={test}>
+          {busy === 'test' ? 'Testing…' : 'Test connection'}
+        </button>
+        <button className="btn-secondary" disabled={!!busy} onClick={syncNow}>
+          {busy === 'sync' ? 'Syncing…' : 'Sync now'}
+        </button>
+        {cfg?.lastSyncAt && (
+          <span className="self-center text-xs text-slate-500">
+            Last synced {new Date(cfg.lastSyncAt).toLocaleString('en-US')} ({cfg.lastSyncCount ?? 0} POs)
+          </span>
+        )}
+      </div>
+
+      {msg && <p className={`text-sm ${msg.tone === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{msg.text}</p>}
+    </section>
+  )
+}
+
 export default function Settings(): React.JSX.Element {
   const [dbPath, setDbPath] = useState('')
   const [version, setVersion] = useState('')
@@ -269,6 +449,8 @@ export default function Settings(): React.JSX.Element {
         </div>
         {updateMsg && <p className="text-sm text-slate-600">{updateMsg}</p>}
       </section>
+
+      <ReconciliationSettings />
 
       <ScreenLockSection />
 

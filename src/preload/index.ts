@@ -38,6 +38,16 @@ const CHANNELS = new Set([
   'db.getPath',
   'db.backup',
   'db.restore',
+  'recon.getConfig',
+  'recon.setConfig',
+  'recon.testConnection',
+  'recon.sync',
+  'recon.match',
+  'recon.queue',
+  'recon.confirm',
+  'recon.reject',
+  'recon.ledger',
+  'recon.unmatchedCharges',
   'app.version',
   'updates.check'
 ])

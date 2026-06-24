@@ -18,6 +18,14 @@ import type {
   Kpis,
   KpiFilters,
   ParsedFile,
+  ReconConfig,
+  ReconConfigInput,
+  ReconLedger,
+  ReconMatchResult,
+  ReconReviewItem,
+  ReconSyncResult,
+  ReconTestResult,
+  ReconUnmatchedCharge,
   TransactionClearRequest,
   TransactionDeleteResult,
   Txn,
@@ -95,6 +103,18 @@ export const api = {
     getPath: () => call<string>('db.getPath'),
     backup: () => call<string | null>('db.backup'),
     restore: () => call<string | null>('db.restore')
+  },
+  recon: {
+    getConfig: () => call<ReconConfig>('recon.getConfig'),
+    setConfig: (input: ReconConfigInput) => call<ReconConfig>('recon.setConfig', input),
+    testConnection: () => call<ReconTestResult>('recon.testConnection'),
+    sync: () => call<ReconSyncResult>('recon.sync'),
+    match: () => call<ReconMatchResult>('recon.match'),
+    queue: () => call<ReconReviewItem[]>('recon.queue'),
+    confirm: (linkId: number) => call<boolean>('recon.confirm', { linkId }),
+    reject: (linkId: number) => call<boolean>('recon.reject', { linkId }),
+    ledger: () => call<ReconLedger>('recon.ledger'),
+    unmatchedCharges: () => call<ReconUnmatchedCharge[]>('recon.unmatchedCharges')
   },
   app: {
     version: () => call<string>('app.version')

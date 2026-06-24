@@ -15,6 +15,8 @@ import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
 import { fetchCardholderSpend, fetchTransactionsForExport } from './query'
 import { getKpis } from './ipc'
 import { buildCsv, buildExportFileName, buildXlsx } from './export'
+import { confirmLink, getLedger, getReviewQueue, getUnmatchedCharges, rejectLink, runMatch } from './matcher'
+import { setReconConfig } from './reconcile'
 import type { Card, ColumnMapping, CommitRow, ExpenseType } from '@shared/types'
 
 let failures = 0
@@ -606,6 +608,107 @@ export async function runSelfTest(): Promise<number> {
     exportDate
   )
   check('export filename: pdf report extension', pdfReportName === 'transactions-personal-dining-2026-06-18.pdf', pdfReportName)
+
+  console.log('\n[12] Reconciliation: match statement charges to POs')
+  db.prepare("INSERT INTO cards (name) VALUES ('Recon Test Amex')").run()
+  const reconCard = db.prepare("SELECT * FROM cards WHERE name = 'Recon Test Amex'").get() as Card
+
+  const insPo = db.prepare(
+    `INSERT INTO po_cache (id, po_number, po_date, vendor, subtotal, sales_tax, total, status, is_chargeback, requester_name, lines_json)
+     VALUES (@id, @po_number, @po_date, @vendor, @subtotal, @sales_tax, @total, 'CLOSED', 0, @requester_name, @lines_json)`
+  )
+  const po = (id: string, n: number, day: string, vendor: string, total: number, lines = '[]', requester = 'Tester'): void => {
+    insPo.run({
+      id,
+      po_number: n,
+      po_date: `2026-06-${day}T12:00:00.000Z`,
+      vendor,
+      subtotal: total,
+      sales_tax: 0,
+      total,
+      requester_name: requester,
+      lines_json: lines
+    })
+  }
+  po('po-9001', 9001, '10', 'Amazon', 100.0) // unique exact for charge A -> auto
+  po('po-9002', 9002, '10', 'Amazon', 250.0, '[{"description":"Office chairs","qty":1,"rate":250,"amount":250}]') // ambiguous
+  po('po-9003', 9003, '11', 'Amazon', 250.0) // ambiguous (same amount as 9002)
+  po('po-9004', 9004, '10', 'Dell', 500.0) // vendor test: matches the Dell charge, not Amazon
+  po('po-9005', 9005, '10', 'Amazon', 77.77) // no charge -> posWithoutCharge report
+  po('po-9006', 9006, '10', 'Amazon', 80.0) // band (not exact) target for charge G
+
+  const insTxn = db.prepare(
+    'INSERT INTO transactions (card_id, txn_date, description, amount, dedupe_hash) VALUES (?, ?, ?, ?, ?)'
+  )
+  const txn = (date: string, desc: string, amount: number): number =>
+    Number(insTxn.run(reconCard.id, date, desc, amount, `recon-${desc}-${amount}`).lastInsertRowid)
+  const txnA = txn('2026-06-12', 'AMZN Mktp US*A100', 100.0) // +2d, exact, unique -> auto 9001
+  txn('2026-06-12', 'AMZN Mktp US*B250', 250.0) // exact but 2 POs -> queue (9002 + 9003)
+  const txnC = txn('2026-06-11', 'DELL ORDER 0099', 500.0) // exact Dell -> auto 9004
+  txn('2026-06-12', 'AMAZON.COM*ROGUE', 33.33) // no PO -> rogue report
+  txn('2026-06-25', 'AMZN Mktp US*LATE', 100.0) // +15d, outside window -> no match
+  txn('2026-06-12', 'AMZN Mktp US*BAND', 82.0) // 2.5% off 80.00 -> band -> queue, not auto
+
+  const result = runMatch(db)
+  // The matcher scans every card's charges (correct), so chargesConsidered also
+  // counts rows left by earlier sections; only the 6 POs here are isolated.
+  check('match: considered all charges + the 6 seeded POs', result.chargesConsidered >= 6 && result.posConsidered === 6, JSON.stringify(result))
+  check('match: 2 auto-links (unique exact A->9001, C->9004)', result.autoLinked === 2, `got ${result.autoLinked}`)
+  check('match: 2 charges queued for review (B, G)', result.queued === 2, `got ${result.queued}`)
+
+  const autoA = db.prepare("SELECT po_id, status FROM po_links WHERE txn_id = ?").get(txnA) as { po_id: string; status: string } | undefined
+  check('match: charge A auto-linked to PO 9001', autoA?.status === 'auto' && autoA.po_id === 'po-9001', JSON.stringify(autoA))
+  const autoC = db.prepare("SELECT po_id, status FROM po_links WHERE txn_id = ?").get(txnC) as { po_id: string; status: string } | undefined
+  check('match: Dell charge matched Dell PO (vendor gating)', autoC?.status === 'auto' && autoC.po_id === 'po-9004', JSON.stringify(autoC))
+
+  const lateLinks = (db.prepare("SELECT COUNT(*) AS n FROM po_links l JOIN transactions t ON t.id = l.txn_id WHERE t.description LIKE '%LATE%'").get() as { n: number }).n
+  check('match: out-of-window charge produced no link', lateLinks === 0, `got ${lateLinks}`)
+
+  let reconQueue = getReviewQueue(db)
+  const bItem = reconQueue.find((q) => q.description.includes('B250'))
+  check('queue: ambiguous charge B has 2 candidate POs', bItem?.candidates.length === 2, `got ${bItem?.candidates.length}`)
+  check('queue: candidate carries PO line detail', !!bItem?.candidates.find((c) => c.poNumber === 9002)?.lines.length)
+  const gItem = reconQueue.find((q) => q.description.includes('BAND'))
+  check('queue: band-only charge G has 1 candidate (PO 9006), not auto', gItem?.candidates.length === 1 && gItem.candidates[0].poNumber === 9006, JSON.stringify(gItem?.candidates))
+
+  // Confirm B -> 9002; the competing pending (B -> 9003) must be dropped.
+  const b9002 = bItem!.candidates.find((c) => c.poNumber === 9002)!
+  confirmLink(db, b9002.linkId)
+  const bConfirmed = db.prepare("SELECT status FROM po_links WHERE id = ?").get(b9002.linkId) as { status: string }
+  check('confirm: chosen link becomes confirmed', bConfirmed.status === 'confirmed')
+  const bLeftover = (db.prepare("SELECT COUNT(*) AS n FROM po_links l JOIN transactions t ON t.id = l.txn_id WHERE t.description LIKE '%B250%' AND l.status IN ('auto','pending')").get() as { n: number }).n
+  check('confirm: competing candidate for the same charge removed', bLeftover === 0, `got ${bLeftover}`)
+  reconQueue = getReviewQueue(db)
+  check('queue: only charge G remains after confirming B', reconQueue.length === 1 && reconQueue[0].description.includes('BAND'), JSON.stringify(reconQueue.map((q) => q.description)))
+
+  // PO-centric ledger (B confirmed, G still pending).
+  const ledger = getLedger(db)
+  check('ledger: 6 POs total', ledger.summary.totalPos === 6, JSON.stringify(ledger.summary))
+  check('ledger: 3 matched (9001+9004 auto, 9002 confirmed)', ledger.summary.matchedPos === 3, JSON.stringify(ledger.summary))
+  check('ledger: 1 PO in review (9006)', ledger.summary.reviewPos === 1, JSON.stringify(ledger.summary))
+  check('ledger: 2 POs unmatched (9003, 9005)', ledger.summary.unmatchedPos === 2, JSON.stringify(ledger.summary))
+  check('ledger: $850 reconciled (100+250+500)', Math.abs(ledger.summary.amountReconciled - 850) < 0.01, `got ${ledger.summary.amountReconciled}`)
+  const li = (n: number): (typeof ledger.items)[number] | undefined => ledger.items.find((i) => i.poNumber === n)
+  check('ledger: PO 9001 matched to charge A via auto-link', li(9001)?.status === 'matched' && li(9001)?.matchedTxnId === txnA && li(9001)?.linkStatus === 'auto', JSON.stringify(li(9001)))
+  check('ledger: PO 9002 matched via confirmation', li(9002)?.status === 'matched' && li(9002)?.linkStatus === 'confirmed', JSON.stringify(li(9002)))
+  check('ledger: PO 9006 shows as needs-review', li(9006)?.status === 'review' && li(9006)?.reviewCount === 1, JSON.stringify(li(9006)))
+  check('ledger: PO 9005 shows as unmatched', li(9005)?.status === 'unmatched', JSON.stringify(li(9005)))
+
+  // Unmatched charges, scoped to tracked vendors (defaults to ['Amazon']).
+  const trackedAmazon = getUnmatchedCharges(db).map((c) => c.description).sort()
+  check('unmatched (Amazon tracked): ROGUE + LATE', trackedAmazon.length === 2 && trackedAmazon.some((d) => d.includes('ROGUE')) && trackedAmazon.some((d) => d.includes('LATE')), JSON.stringify(trackedAmazon))
+  check('unmatched: excludes the matched Dell charge', !trackedAmazon.some((d) => d.includes('DELL')))
+  // Vendor scoping is general, not hardcoded to Amazon: track only Dell and the
+  // Amazon charges drop out (no unmatched Dell charges here).
+  setReconConfig({ trackedVendors: ['Dell'] })
+  check('unmatched respects the tracked-vendor list (Dell only -> none)', getUnmatchedCharges(db).length === 0, JSON.stringify(getUnmatchedCharges(db)))
+  setReconConfig({ trackedVendors: ['Amazon'] })
+
+  // Reject G's candidate, then re-run: the rejected pair must not reappear.
+  rejectLink(db, gItem!.candidates[0].linkId)
+  const rematch = runMatch(db)
+  check('reject: re-running the matcher does not resurrect a rejected pair', rematch.queued === 0, JSON.stringify(rematch))
+  check('reject: confirmed link survives a re-run', (db.prepare("SELECT COUNT(*) AS n FROM po_links WHERE status = 'confirmed'").get() as { n: number }).n === 1)
 
   closeDb()
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}\n`)

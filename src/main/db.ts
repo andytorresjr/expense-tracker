@@ -82,6 +82,58 @@ CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_txn_card ON transactions(card_id);
 CREATE INDEX IF NOT EXISTS idx_txn_type ON transactions(expense_type);
 CREATE INDEX IF NOT EXISTS idx_txn_dedupe ON transactions(dedupe_hash);
+
+-- ---- Reconciliation (match statement charges to PO Automation records) ----
+
+-- Generic key/value app settings (PO connection URL, encrypted token, match
+-- tolerances, last-sync metadata). One row per setting key.
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+
+-- Local cache of purchase orders pulled from the PO Automation read-only API.
+-- id is the PO app's PurchaseOrder.id (cuid). Amounts mirror the statement's REAL
+-- storage; lines_json holds [{description,qty,rate,amount}] for review/LLM context.
+CREATE TABLE IF NOT EXISTS po_cache (
+  id TEXT PRIMARY KEY,
+  po_number INTEGER NOT NULL,
+  po_date TEXT NOT NULL,
+  vendor TEXT NOT NULL,
+  subtotal REAL NOT NULL,
+  sales_tax REAL NOT NULL,
+  total REAL NOT NULL,
+  status TEXT,
+  is_chargeback INTEGER NOT NULL DEFAULT 0,
+  chargeback_client TEXT,
+  requester_name TEXT,
+  requester_email TEXT,
+  created_by_name TEXT,
+  created_by_email TEXT,
+  lines_json TEXT NOT NULL DEFAULT '[]',
+  synced_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_po_cache_total ON po_cache(total);
+CREATE INDEX IF NOT EXISTS idx_po_cache_date ON po_cache(po_date);
+CREATE INDEX IF NOT EXISTS idx_po_cache_vendor ON po_cache(vendor);
+
+-- A match between a statement transaction and a cached PO. status: 'auto'
+-- (high-confidence auto-link), 'pending' (in the review queue), 'confirmed'
+-- (boss approved), 'rejected' (boss dismissed). confidence 0..1; score_json
+-- records the per-signal breakdown for transparency.
+CREATE TABLE IF NOT EXISTS po_links (
+  id INTEGER PRIMARY KEY,
+  txn_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  po_id TEXT NOT NULL REFERENCES po_cache(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('auto','pending','confirmed','rejected')),
+  confidence REAL,
+  score_json TEXT,
+  matched_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(txn_id, po_id)
+);
+CREATE INDEX IF NOT EXISTS idx_po_links_txn ON po_links(txn_id);
+CREATE INDEX IF NOT EXISTS idx_po_links_po ON po_links(po_id);
+CREATE INDEX IF NOT EXISTS idx_po_links_status ON po_links(status);
 `
 
 const SEED_CATEGORIES: [string, string][] = [
