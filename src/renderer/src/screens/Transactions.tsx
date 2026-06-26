@@ -17,7 +17,13 @@ import RuleModal, { type RuleDraft } from '../components/RuleModal'
 import ClearTransactionsModal from '../components/ClearTransactionsModal'
 import ExportModal from '../components/ExportModal'
 import PrintableReport, { type ReportMeta } from '../components/PrintableReport'
+import TxnDetailsModal from '../components/TxnDetailsModal'
 import QuickCategorize from './QuickCategorize'
+
+/** A business charge in a client-required category that still has no client name —
+ *  the IRS-substantiation gap the warning badge and filter highlight. */
+const needsClient = (txn: Txn): boolean =>
+  txn.expense_type === 'business' && txn.category_requires_client === 1 && !txn.client?.trim()
 
 const PAGE_SIZE = 50
 
@@ -62,6 +68,9 @@ export default function Transactions(): React.JSX.Element {
   const [printState, setPrintState] = useState<{ rows: Txn[]; meta: ReportMeta } | null>(null)
   const [uncatCount, setUncatCount] = useState(0)
   const [allCount, setAllCount] = useState(0)
+  const [missingClientCount, setMissingClientCount] = useState(0)
+  const [missingClientOnly, setMissingClientOnly] = useState(false)
+  const [detailsTxn, setDetailsTxn] = useState<Txn | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const quickButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -69,7 +78,13 @@ export default function Transactions(): React.JSX.Element {
     const categoryId =
       categoryFilter === '' ? undefined : categoryFilter === 'uncategorized' ? 'uncategorized' : Number(categoryFilter)
     const cardId = cardFilter === '' ? undefined : Number(cardFilter)
-    const scopeFilters: TxnFilters = { expenseType, cardId, categoryId, search: search || undefined }
+    const scopeFilters: TxnFilters = {
+      expenseType,
+      cardId,
+      categoryId,
+      search: search || undefined,
+      missingClient: missingClientOnly || undefined
+    }
     api.transactions
       .list({
         ...scopeFilters,
@@ -100,7 +115,9 @@ export default function Transactions(): React.JSX.Element {
         setAllCount(all.total)
       })
       .catch(() => {})
-  }, [expenseType, search, categoryFilter, cardFilter, sortBy, sortDir, page])
+    // Business meals/entertainment missing a client name — the IRS-substantiation gap.
+    api.transactions.missingClientCount().then(setMissingClientCount).catch(() => setMissingClientCount(0))
+  }, [expenseType, search, categoryFilter, cardFilter, sortBy, sortDir, page, missingClientOnly])
 
   useEffect(() => {
     api.categories.list().then(setCategories).catch((e) => setError(e.message))
@@ -109,7 +126,7 @@ export default function Transactions(): React.JSX.Element {
 
   useEffect(() => {
     setPage(0)
-  }, [expenseType, search, categoryFilter, cardFilter, sortBy, sortDir])
+  }, [expenseType, search, categoryFilter, cardFilter, sortBy, sortDir, missingClientOnly])
 
   useEffect(load, [load])
 
@@ -141,6 +158,12 @@ export default function Transactions(): React.JSX.Element {
   const bulkCategory = (value: string): Promise<void> =>
     run(() => api.transactions.bulkUpdate([...selected], { category_id: value ? Number(value) : null }).then(() => {}))
 
+  const saveDetails = (txn: Txn, fields: { client: string | null; business_purpose: string | null }): Promise<void> =>
+    run(async () => {
+      await api.transactions.update(txn.id, fields)
+      setDetailsTxn(null)
+    })
+
   const clearTransactions = (request: TransactionClearRequest): Promise<void> =>
     run(async () => {
       const result = await api.transactions.clear(request)
@@ -166,6 +189,7 @@ export default function Transactions(): React.JSX.Element {
     categoryId:
       categoryFilter === '' ? undefined : categoryFilter === 'uncategorized' ? 'uncategorized' : Number(categoryFilter),
     search: search || undefined,
+    missingClient: missingClientOnly || undefined,
     sortBy,
     sortDir
   })
@@ -231,7 +255,10 @@ export default function Transactions(): React.JSX.Element {
   // column has been imported (the spend query returns rows then). The "who spends
   // the most" breakdown itself lives on the Dashboard, alongside the other KPIs.
   const hasCardholder = cardholderSpend.length > 0
-  const columnCount = hasCardholder ? 9 : 8
+  // Show the Client column once any client-required gap exists or any visible row
+  // already carries a client, so meal-free statements stay uncluttered.
+  const showClient = missingClientCount > 0 || data.rows.some((r) => r.client || needsClient(r))
+  const columnCount = 8 + (hasCardholder ? 1 : 0) + (showClient ? 1 : 0)
   const toggleSort = (key: SortBy): void => {
     if (sortBy === key) {
       setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
@@ -308,6 +335,22 @@ export default function Transactions(): React.JSX.Element {
       {error && <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 px-4 py-3 text-sm">{error}</div>}
       {notice && <div className="rounded-lg bg-green-50 border border-green-200 text-green-700 px-4 py-3 text-sm">{notice}</div>}
 
+      {(missingClientCount > 0 || missingClientOnly) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2.5 text-sm">
+          <span className="flex-1">
+            ⚠ <strong>{missingClientCount}</strong> business meal/entertainment transaction
+            {missingClientCount === 1 ? '' : 's'} {missingClientCount === 1 ? 'is' : 'are'} missing a client name the IRS
+            requires.
+          </span>
+          <button
+            className={`btn-secondary !py-1 ${missingClientOnly ? 'border-amber-400 text-amber-800 bg-amber-100' : ''}`}
+            onClick={() => setMissingClientOnly((v) => !v)}
+          >
+            {missingClientOnly ? 'Show all' : 'Show only these'}
+          </button>
+        </div>
+      )}
+
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 border border-slate-200 px-4 py-2 text-sm">
           <span className="text-slate-600">{selected.size} selected:</span>
@@ -373,6 +416,11 @@ export default function Transactions(): React.JSX.Element {
                   </button>
                 </th>
               )}
+              {showClient && (
+                <th className="px-4 py-2.5 text-left font-medium text-slate-600" title="Client / attendees — required for business meals & entertainment">
+                  Client
+                </th>
+              )}
               <th className="px-4 py-2.5"></th>
             </tr>
           </thead>
@@ -423,6 +471,35 @@ export default function Transactions(): React.JSX.Element {
                 {hasCardholder && (
                   <td className="px-4 py-2 text-slate-600 max-w-44 truncate" title={txn.cardholder ?? ''}>
                     {txn.cardholder ?? <span className="text-slate-300">—</span>}
+                  </td>
+                )}
+                {showClient && (
+                  <td className="px-4 py-2 max-w-44">
+                    {txn.client ? (
+                      <button
+                        onClick={() => setDetailsTxn(txn)}
+                        className="text-slate-600 truncate max-w-full hover:text-blue-600"
+                        title={`${txn.client}${txn.business_purpose ? ` — ${txn.business_purpose}` : ''} (click to edit)`}
+                      >
+                        {txn.client}
+                      </button>
+                    ) : needsClient(txn) ? (
+                      <button
+                        onClick={() => setDetailsTxn(txn)}
+                        className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                        title="The IRS requires a client name for business meals & entertainment"
+                      >
+                        ⚠ Add client
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setDetailsTxn(txn)}
+                        className="text-xs text-slate-300 hover:text-blue-600"
+                        title="Add client / business purpose"
+                      >
+                        + add
+                      </button>
+                    )}
                   </td>
                 )}
                 <td className="px-4 py-2 text-right">
@@ -501,6 +578,16 @@ export default function Transactions(): React.JSX.Element {
           onCancel={() => setExportOpen(false)}
           onExport={doExport}
           onPdf={doPdf}
+        />
+      )}
+
+      {detailsTxn && (
+        <TxnDetailsModal
+          txn={detailsTxn}
+          busy={busy}
+          needsClient={needsClient(detailsTxn)}
+          onCancel={() => setDetailsTxn(null)}
+          onSave={(fields) => saveDetails(detailsTxn, fields)}
         />
       )}
 

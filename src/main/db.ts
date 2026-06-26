@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS categories (
   name TEXT NOT NULL UNIQUE,
   color TEXT,
   hotkey TEXT CHECK (hotkey IS NULL OR length(hotkey) = 1),
-  is_archived INTEGER NOT NULL DEFAULT 0
+  is_archived INTEGER NOT NULL DEFAULT 0,
+  requires_client INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS category_rules (
@@ -66,6 +67,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   import_batch_id INTEGER REFERENCES import_batches(id) ON DELETE SET NULL,
   dedupe_hash TEXT NOT NULL,
   cardholder TEXT,
+  client TEXT,
+  business_purpose TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -135,6 +138,11 @@ CREATE INDEX IF NOT EXISTS idx_po_links_txn ON po_links(txn_id);
 CREATE INDEX IF NOT EXISTS idx_po_links_po ON po_links(po_id);
 CREATE INDEX IF NOT EXISTS idx_po_links_status ON po_links(status);
 `
+
+// Categories whose business charges the IRS requires a client/attendee name for
+// (meals & entertainment substantiation). Seeded with requires_client = 1; the
+// flag is user-editable per category afterwards.
+const REQUIRES_CLIENT = new Set<string>(['Meals & Entertainment'])
 
 const SEED_CATEGORIES: [string, string][] = [
   ['Travel', '#3b82f6'],
@@ -337,10 +345,39 @@ ALTER TABLE transactions_new RENAME TO transactions;
   createTransactionIndexes(database)
 }
 
+/** Add the per-transaction client/attendees and business-purpose columns. These
+ *  satisfy the IRS substantiation requirement for business meals & entertainment
+ *  (who was present, and why). Plain ALTERs, safe after the table-rebuild
+ *  migrations above, which only fire on databases too old to carry them. */
+function ensureTransactionClientColumns(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(transactions)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'client')) {
+    database.exec('ALTER TABLE transactions ADD COLUMN client TEXT')
+  }
+  if (!columns.some((column) => column.name === 'business_purpose')) {
+    database.exec('ALTER TABLE transactions ADD COLUMN business_purpose TEXT')
+  }
+}
+
+/** Add the per-category "requires a client name" flag. Existing databases get it
+ *  defaulted on for the seeded Meals & Entertainment category; fresh databases
+ *  get the same default at seed time (see REQUIRES_CLIENT). */
+function ensureCategoryRequiresClientColumn(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(categories)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'requires_client')) {
+    database.exec('ALTER TABLE categories ADD COLUMN requires_client INTEGER NOT NULL DEFAULT 0')
+    const setDefaults = database.prepare('UPDATE categories SET requires_client = 1 WHERE name = ?')
+    const apply = database.transaction(() => {
+      for (const name of REQUIRES_CLIENT) setDefaults.run(name)
+    })
+    apply()
+  }
+}
+
 function ensureSeedCategories(database: Database.Database): void {
-  const insert = database.prepare('INSERT OR IGNORE INTO categories (name, color) VALUES (?, ?)')
+  const insert = database.prepare('INSERT OR IGNORE INTO categories (name, color, requires_client) VALUES (?, ?, ?)')
   const seedMissing = database.transaction(() => {
-    for (const [name, color] of SEED_CATEGORIES) insert.run(name, color)
+    for (const [name, color] of SEED_CATEGORIES) insert.run(name, color, REQUIRES_CLIENT.has(name) ? 1 : 0)
   })
   seedMissing()
 }
@@ -354,13 +391,15 @@ export function initDb(dbPath: string): Database.Database {
   ensureDedupeMultiplicity(db)
   ensureTransactionCardholderColumn(db)
   ensureProfileCardholderColumn(db)
+  ensureTransactionClientColumns(db)
   ensureCategoryHotkeyColumn(db)
+  ensureCategoryRequiresClientColumn(db)
 
   const count = db.prepare('SELECT COUNT(*) AS n FROM categories').get() as { n: number }
   if (count.n === 0) {
-    const insert = db.prepare('INSERT INTO categories (name, color) VALUES (?, ?)')
+    const insert = db.prepare('INSERT INTO categories (name, color, requires_client) VALUES (?, ?, ?)')
     const seedAll = db.transaction(() => {
-      for (const [name, color] of SEED_CATEGORIES) insert.run(name, color)
+      for (const [name, color] of SEED_CATEGORIES) insert.run(name, color, REQUIRES_CLIENT.has(name) ? 1 : 0)
     })
     seedAll()
   }

@@ -56,6 +56,8 @@ export const api = {
     create: (name: string, color: string | null) => call<Category>('categories.create', { name, color }),
     update: (id: number, name: string, color: string | null) => call<Category>('categories.update', { id, name, color }),
     setHotkey: (id: number, hotkey: string | null) => call<Category>('categories.setHotkey', { id, hotkey }),
+    setRequiresClient: (id: number, requires_client: boolean) =>
+      call<Category>('categories.setRequiresClient', { id, requires_client }),
     remove: (id: number) => call<boolean>('categories.delete', { id })
   },
   rules: {
@@ -75,10 +77,25 @@ export const api = {
     list: (filters: TxnFilters) => call<TxnPage>('transactions.list', filters),
     cardholderSpend: (filters: TxnFilters) => call<CardholderSpend[]>('transactions.cardholderSpend', filters),
     categorizeQueue: () => call<Txn[]>('transactions.categorizeQueue'),
-    update: (id: number, fields: { category_id?: number | null; expense_type?: ExpenseType | null }) =>
-      call<Txn>('transactions.update', { id, ...fields }),
-    bulkUpdate: (ids: number[], fields: { category_id?: number | null; expense_type?: ExpenseType | null }) =>
-      call<number>('transactions.bulkUpdate', { ids, ...fields }),
+    missingClientCount: () => call<number>('transactions.missingClientCount'),
+    update: (
+      id: number,
+      fields: {
+        category_id?: number | null
+        expense_type?: ExpenseType | null
+        client?: string | null
+        business_purpose?: string | null
+      }
+    ) => call<Txn>('transactions.update', { id, ...fields }),
+    bulkUpdate: (
+      ids: number[],
+      fields: {
+        category_id?: number | null
+        expense_type?: ExpenseType | null
+        client?: string | null
+        business_purpose?: string | null
+      }
+    ) => call<number>('transactions.bulkUpdate', { ids, ...fields }),
     clear: (request: TransactionClearRequest) => call<TransactionDeleteResult>('transactions.clear', request),
     exportRows: (filters: TxnFilters) => call<Txn[]>('transactions.exportRows', filters),
     export: (filters: TxnFilters, format: ExportFormat, fileNameBase?: string) =>

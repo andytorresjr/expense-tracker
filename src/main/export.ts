@@ -2,13 +2,18 @@ import Papa from 'papaparse'
 import * as XLSX from 'xlsx'
 import type { ExportFormat, KpiFilters, Txn, TxnFilters } from '@shared/types'
 
-/** Columns written to exported files, in order. Cardholder is appended only when
- *  the data carries it, so statements without that column export unchanged. */
+/** Columns written to exported files, in order. Cardholder, Client, and Business
+ *  Purpose are each appended only when the data carries them, so statements
+ *  without those fields export unchanged. */
 const BASE_COLUMNS = ['Date', 'Description', 'Amount', 'Type', 'Category', 'Card'] as const
-type Column = (typeof BASE_COLUMNS)[number] | 'Cardholder'
+type Column = (typeof BASE_COLUMNS)[number] | 'Cardholder' | 'Client' | 'Business Purpose'
 
 function exportColumns(rows: Txn[]): Column[] {
-  return rows.some((txn) => txn.cardholder) ? [...BASE_COLUMNS, 'Cardholder'] : [...BASE_COLUMNS]
+  const columns: Column[] = [...BASE_COLUMNS]
+  if (rows.some((txn) => txn.cardholder)) columns.push('Cardholder')
+  if (rows.some((txn) => txn.client)) columns.push('Client')
+  if (rows.some((txn) => txn.business_purpose)) columns.push('Business Purpose')
+  return columns
 }
 function categorySegment(filters: TxnFilters, rows: Txn[]): string | null {
   if (filters.categoryId === 'uncategorized') return 'Uncategorized'
@@ -90,7 +95,9 @@ function toRecord(txn: Txn): Record<Column, string | number> {
     Type: txn.expense_type ?? 'Unassigned',
     Category: txn.category_name ?? 'Uncategorized',
     Card: txn.card_name,
-    Cardholder: txn.cardholder ?? ''
+    Cardholder: txn.cardholder ?? '',
+    Client: txn.client ?? '',
+    'Business Purpose': txn.business_purpose ?? ''
   }
 }
 

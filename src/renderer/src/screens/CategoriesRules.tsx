@@ -200,6 +200,17 @@ export default function CategoriesRules(): React.JSX.Element {
     )
   }
 
+  const toggleRequiresClient = (category: Category, requires: boolean): Promise<void> =>
+    run(
+      async () => {
+        await api.categories.setRequiresClient(category.id, requires)
+        load()
+      },
+      requires
+        ? `${category.name} now flags business charges missing a client name.`
+        : `${category.name} no longer requires a client name.`
+    )
+
   // ---- rules ----
   const openNewRule = (): void => {
     setEditingRuleId(null)
@@ -333,7 +344,9 @@ export default function CategoriesRules(): React.JSX.Element {
       <section className="card-panel p-6 space-y-4">
         <h2 className="font-semibold text-slate-800">Categories &amp; budgets</h2>
         <p className="text-sm text-slate-500">
-          Monthly budgets are tracked separately for business and personal so the two reports never mix.
+          Monthly budgets are tracked separately for business and personal so the two reports never mix. Mark a category
+          as <strong>Client req.</strong> (e.g. Meals &amp; Entertainment) to flag business charges that still need a
+          client / attendee name for IRS substantiation.
         </p>
         <div className="overflow-auto rounded-lg border border-slate-200">
           <table className="text-sm w-full">
@@ -342,6 +355,9 @@ export default function CategoriesRules(): React.JSX.Element {
                 <th className="px-4 py-2 text-left font-medium text-slate-600">Category</th>
                 <th className="px-4 py-2 text-left font-medium text-slate-600">Color</th>
                 <th className="px-4 py-2 text-left font-medium text-slate-600">Hotkey</th>
+                <th className="px-4 py-2 text-center font-medium text-slate-600" title="Flag business charges in this category that have no client / attendee name">
+                  Client req.
+                </th>
                 <th className="px-4 py-2 text-right font-medium text-slate-600">Business budget / mo</th>
                 <th className="px-4 py-2 text-right font-medium text-slate-600">Personal budget / mo</th>
                 <th className="px-4 py-2"></th>
@@ -413,6 +429,16 @@ export default function CategoriesRules(): React.JSX.Element {
                           e.currentTarget.blur()
                         }
                       }}
+                    />
+                  </td>
+                  <td className="px-4 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 align-middle"
+                      aria-label={`Require a client name for business ${c.name} charges`}
+                      checked={c.requires_client === 1}
+                      disabled={busy}
+                      onChange={(e) => toggleRequiresClient(c, e.target.checked)}
                     />
                   </td>
                   {(['business', 'personal'] as ExpenseType[]).map((type) => (

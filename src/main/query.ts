@@ -51,6 +51,14 @@ export function buildTxnWhere(filters: TxnFilters): { where: string; params: Rec
     clauses.push('t.txn_date <= @dateTo')
     params.dateTo = filters.dateTo
   }
+  if (filters.missingClient) {
+    // Business charges in a client-required category (e.g. Meals & Entertainment)
+    // that still have no client recorded. Written as a self-contained subquery so
+    // it holds even in queries that don't join the categories table (e.g. COUNT).
+    clauses.push(
+      "t.expense_type = 'business' AND EXISTS (SELECT 1 FROM categories cc WHERE cc.id = t.category_id AND cc.requires_client = 1) AND TRIM(COALESCE(t.client, '')) = ''"
+    )
+  }
   return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
 }
 
@@ -70,7 +78,8 @@ export function fetchTransactionsForExport(db: Database.Database, filters: TxnFi
   const sortDir = filters.sortDir === 'asc' ? 'ASC' : 'DESC'
   return db
     .prepare(
-      `SELECT t.*, ca.name AS card_name, c.name AS category_name
+      `SELECT t.*, ca.name AS card_name, c.name AS category_name,
+              COALESCE(c.requires_client, 0) AS category_requires_client
        FROM transactions t
        JOIN cards ca ON ca.id = t.card_id
        LEFT JOIN categories c ON c.id = t.category_id

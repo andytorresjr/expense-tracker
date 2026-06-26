@@ -17,6 +17,9 @@ export interface Category {
   color: string | null
   hotkey: string | null
   is_archived: 0 | 1
+  /** When 1, business transactions in this category should carry a client/attendee
+   *  name (IRS meals & entertainment substantiation). Surfaced as a warning, not enforced. */
+  requires_client: 0 | 1
 }
 
 export interface CategoryRule {
@@ -48,8 +51,14 @@ export interface Txn {
   import_batch_id: number | null
   /** Name of the individual cardholder who made the charge, when the statement carries it. */
   cardholder: string | null
+  /** Client / attendees present, for IRS substantiation of business meals & entertainment. */
+  client: string | null
+  /** Optional free-text business purpose for the expense. */
+  business_purpose: string | null
   card_name: string
   category_name: string | null
+  /** 1 when this transaction's category requires a client name (joined from categories). */
+  category_requires_client: 0 | 1
 }
 
 export interface ImportProfile {
@@ -173,6 +182,9 @@ export interface TxnFilters {
   search?: string
   dateFrom?: string
   dateTo?: string
+  /** When true, match only business transactions whose category requires a client
+   *  name but have none recorded yet (the IRS-substantiation gap filter). */
+  missingClient?: boolean
   sortBy?: 'txn_date' | 'amount' | 'description' | 'expense_type' | 'category_name' | 'cardholder'
   sortDir?: 'asc' | 'desc'
   page?: number

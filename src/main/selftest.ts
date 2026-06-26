@@ -12,7 +12,7 @@ import { initDb, closeDb } from './db'
 import { buildPreview, commitImport, detectHeaderRow, parseAmount, parseFile } from './importer'
 import { rerunRules } from './rules'
 import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
-import { fetchCardholderSpend, fetchTransactionsForExport } from './query'
+import { buildTxnWhere, fetchCardholderSpend, fetchTransactionsForExport } from './query'
 import { getKpis } from './ipc'
 import { buildCsv, buildExportFileName, buildXlsx } from './export'
 import { confirmLink, getLedger, getReviewQueue, getUnmatchedCharges, rejectLink, runMatch } from './matcher'
@@ -608,6 +608,36 @@ export async function runSelfTest(): Promise<number> {
     exportDate
   )
   check('export filename: pdf report extension', pdfReportName === 'transactions-personal-dining-2026-06-18.pdf', pdfReportName)
+
+  console.log('\n[11b] Client substantiation: requires-client flag, missing-client filter, export')
+  // The exportCard rows are the only transactions in the DB at this point: DINING
+  // ONE (business, meals), DINING TWO (personal, meals), TRAVEL ONE (business,
+  // travel). Only the first is a business charge in a client-required category.
+  const missingClientCount = (): number => {
+    const { where, params } = buildTxnWhere({ missingClient: true })
+    return (db.prepare(`SELECT COUNT(*) AS n FROM transactions t ${where}`).get(params) as { n: number }).n
+  }
+  const mealsRequiresClient = (db.prepare('SELECT requires_client FROM categories WHERE id = ?').get(mealsId) as { requires_client: number }).requires_client
+  check('requires_client: meals category seeded as client-required', mealsRequiresClient === 1, `got ${mealsRequiresClient}`)
+  check('missing-client: one business meal lacks a client name', missingClientCount() === 1, `got ${missingClientCount()}`)
+
+  // The flag drives the filter: clearing it drops the gap, restoring it brings it back.
+  db.prepare('UPDATE categories SET requires_client = 0 WHERE id = ?').run(mealsId)
+  check('missing-client: none flagged once the category no longer requires a client', missingClientCount() === 0, `got ${missingClientCount()}`)
+  db.prepare('UPDATE categories SET requires_client = 1 WHERE id = ?').run(mealsId)
+  check('missing-client: flag restored re-surfaces the gap', missingClientCount() === 1, `got ${missingClientCount()}`)
+
+  // Recording a client name closes the gap (empty/whitespace is treated as unset).
+  const diningOneId = (db.prepare("SELECT id FROM transactions WHERE description = 'DINING ONE'").get() as { id: number }).id
+  db.prepare('UPDATE transactions SET client = ? WHERE id = ?').run('Acme Corp — J. Smith', diningOneId)
+  check('missing-client: recording a client name clears the gap', missingClientCount() === 0, `got ${missingClientCount()}`)
+
+  // Export gains the Client column only once a row carries one.
+  const clientExport = fetchTransactionsForExport(db, { expenseType: 'all', cardId: exportCard.id })
+  const clientCsv = buildCsv(clientExport)
+  const clientHeader = clientCsv.trim().split(/\r?\n/)[0]
+  check('export csv: Client column appears once a client is recorded', clientHeader.includes('Client'), clientHeader)
+  check('export csv: client name is written out', clientCsv.includes('Acme Corp'), 'missing client value')
 
   console.log('\n[12] Reconciliation: match statement charges to POs')
   db.prepare("INSERT INTO cards (name) VALUES ('Recon Test Amex')").run()

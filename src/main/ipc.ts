@@ -225,6 +225,10 @@ export function registerIpcHandlers(): void {
     return getDb().prepare('SELECT * FROM categories WHERE id = ?').get(p.id)
   })
   handle('categories.setHotkey', (p: { id: number; hotkey: string | null }) => setCategoryHotkey(getDb(), p.id, p.hotkey))
+  handle('categories.setRequiresClient', (p: { id: number; requires_client: boolean }) => {
+    getDb().prepare('UPDATE categories SET requires_client = ? WHERE id = ?').run(p.requires_client ? 1 : 0, p.id)
+    return getDb().prepare('SELECT * FROM categories WHERE id = ?').get(p.id)
+  })
   handle('categories.delete', (p: { id: number }) => {
     getDb().prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(p.id)
     return true
@@ -299,7 +303,8 @@ export function registerIpcHandlers(): void {
     const offset = (filters.page ?? 0) * pageSize
     const rows = db
       .prepare(
-        `SELECT t.*, ca.name AS card_name, c.name AS category_name
+        `SELECT t.*, ca.name AS card_name, c.name AS category_name,
+                COALESCE(c.requires_client, 0) AS category_requires_client
          FROM transactions t
          JOIN cards ca ON ca.id = t.card_id
          LEFT JOIN categories c ON c.id = t.category_id
@@ -309,28 +314,64 @@ export function registerIpcHandlers(): void {
     const total = (db.prepare(`SELECT COUNT(*) AS n FROM transactions t ${where}`).get(params) as { n: number }).n
     return { rows, total }
   })
-  handle('transactions.update', (p: { id: number; category_id?: number | null; expense_type?: ExpenseType | null }) => {
-    const db = getDb()
-    if (p.category_id !== undefined) {
-      db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?').run(p.category_id, p.id)
-    }
-    if (p.expense_type !== undefined) {
-      db.prepare('UPDATE transactions SET expense_type = ?, type_locked = 1 WHERE id = ?').run(p.expense_type, p.id)
-    }
-    return db.prepare('SELECT * FROM transactions WHERE id = ?').get(p.id)
-  })
-  handle('transactions.bulkUpdate', (p: { ids: number[]; category_id?: number | null; expense_type?: ExpenseType | null }) => {
-    const db = getDb()
-    const updCat = db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?')
-    const updType = db.prepare('UPDATE transactions SET expense_type = ?, type_locked = 1 WHERE id = ?')
-    const run = db.transaction(() => {
-      for (const id of p.ids) {
-        if (p.category_id !== undefined) updCat.run(p.category_id, id)
-        if (p.expense_type !== undefined) updType.run(p.expense_type, id)
+  handle(
+    'transactions.update',
+    (p: {
+      id: number
+      category_id?: number | null
+      expense_type?: ExpenseType | null
+      client?: string | null
+      business_purpose?: string | null
+    }) => {
+      const db = getDb()
+      if (p.category_id !== undefined) {
+        db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?').run(p.category_id, p.id)
       }
-    })
-    run()
-    return p.ids.length
+      if (p.expense_type !== undefined) {
+        db.prepare('UPDATE transactions SET expense_type = ?, type_locked = 1 WHERE id = ?').run(p.expense_type, p.id)
+      }
+      // Free-text fields store NULL when blank so the "missing client" filter and
+      // export fallbacks treat empty and unset identically.
+      if (p.client !== undefined) {
+        db.prepare('UPDATE transactions SET client = ? WHERE id = ?').run(p.client?.trim() || null, p.id)
+      }
+      if (p.business_purpose !== undefined) {
+        db.prepare('UPDATE transactions SET business_purpose = ? WHERE id = ?').run(p.business_purpose?.trim() || null, p.id)
+      }
+      return db.prepare('SELECT * FROM transactions WHERE id = ?').get(p.id)
+    }
+  )
+  handle(
+    'transactions.bulkUpdate',
+    (p: {
+      ids: number[]
+      category_id?: number | null
+      expense_type?: ExpenseType | null
+      client?: string | null
+      business_purpose?: string | null
+    }) => {
+      const db = getDb()
+      const updCat = db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?')
+      const updType = db.prepare('UPDATE transactions SET expense_type = ?, type_locked = 1 WHERE id = ?')
+      const updClient = db.prepare('UPDATE transactions SET client = ? WHERE id = ?')
+      const updPurpose = db.prepare('UPDATE transactions SET business_purpose = ? WHERE id = ?')
+      const run = db.transaction(() => {
+        for (const id of p.ids) {
+          if (p.category_id !== undefined) updCat.run(p.category_id, id)
+          if (p.expense_type !== undefined) updType.run(p.expense_type, id)
+          if (p.client !== undefined) updClient.run(p.client?.trim() || null, id)
+          if (p.business_purpose !== undefined) updPurpose.run(p.business_purpose?.trim() || null, id)
+        }
+      })
+      run()
+      return p.ids.length
+    }
+  )
+  // Count of business charges in a client-required category still missing a client
+  // name — the IRS-substantiation gap surfaced as a warning banner/badge.
+  handle('transactions.missingClientCount', () => {
+    const { where, params } = buildTxnWhere({ missingClient: true })
+    return (getDb().prepare(`SELECT COUNT(*) AS n FROM transactions t ${where}`).get(params) as { n: number }).n
   })
   handle('transactions.clear', (p: TransactionClearRequest) => ({ deleted: clearTransactions(getDb(), p) }))
   // Quick-categorize queue: every transaction, uncategorized first, newest first
@@ -339,7 +380,8 @@ export function registerIpcHandlers(): void {
   handle('transactions.categorizeQueue', () =>
     getDb()
       .prepare(
-        `SELECT t.*, ca.name AS card_name, c.name AS category_name
+        `SELECT t.*, ca.name AS card_name, c.name AS category_name,
+                COALESCE(c.requires_client, 0) AS category_requires_client
          FROM transactions t
          JOIN cards ca ON ca.id = t.card_id
          LEFT JOIN categories c ON c.id = t.category_id

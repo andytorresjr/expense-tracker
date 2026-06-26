@@ -73,7 +73,9 @@ export default function QuickCategorize({
   const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null)
   // Hotkeys are computed once from the initial data so they stay stable while you work.
   const [hotkeys, setHotkeys] = useState<Map<number, string>>(new Map())
+  const [clientDraft, setClientDraft] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
+  const clientInputRef = useRef<HTMLInputElement>(null)
   // NULL is the app's uncategorized state; assigning the seeded namesake would lock the row.
   const assignableCategories = useMemo(
     () => categories.filter((category) => category.name.trim().toLowerCase() !== 'uncategorized'),
@@ -111,6 +113,15 @@ export default function QuickCategorize({
   const current = queue[index] ?? null
   const done = !loading && index >= queue.length
   const uncategorizedLeft = useMemo(() => queue.filter((t) => t.category_id === null).length, [queue])
+  // A business charge in a client-required category (e.g. Meals & Entertainment)
+  // that still lacks a client name — surfaces the inline field below.
+  const currentNeedsClient =
+    !!current && current.expense_type === 'business' && current.category_requires_client === 1 && !current.client?.trim()
+
+  // Keep the client draft in sync with whichever transaction is showing.
+  useEffect(() => {
+    setClientDraft(current?.client ?? '')
+  }, [current?.id])
 
   const patchCurrent = (patch: Partial<Txn>): void =>
     setQueue((q) => q.map((t, i) => (i === index ? { ...t, ...patch } : t)))
@@ -124,11 +135,29 @@ export default function QuickCategorize({
   const assignCategory = (categoryId: number): void => {
     if (!current) return
     const name = categoryName(categoryId)
-    patchCurrent({ category_id: categoryId, category_name: name })
+    const cat = categories.find((c) => c.id === categoryId)
+    const requiresClient = cat?.requires_client ?? 0
+    patchCurrent({ category_id: categoryId, category_name: name, category_requires_client: requiresClient })
     api.transactions.update(current.id, { category_id: categoryId }).catch((e) => setError(e.message))
     setLastAction({ description: current.description, category_id: categoryId, category_name: name, expense_type: current.expense_type })
     setSessionCount((n) => n + 1)
-    setIndex((i) => i + 1)
+    // Business meals & entertainment need a client name for the IRS — pause on the
+    // row so it can be entered (still skippable) instead of auto-advancing.
+    if (requiresClient === 1 && current.expense_type === 'business' && !current.client?.trim()) {
+      requestAnimationFrame(() => clientInputRef.current?.focus())
+    } else {
+      setIndex((i) => i + 1)
+    }
+  }
+
+  const saveClient = (advance: boolean): void => {
+    if (!current) return
+    const value = clientDraft.trim() || null
+    if (value !== (current.client ?? null)) {
+      patchCurrent({ client: value })
+      api.transactions.update(current.id, { client: value }).catch((e) => setError(e.message))
+    }
+    if (advance) setIndex((i) => Math.min(i + 1, queue.length))
   }
 
   const skip = (): void => setIndex((i) => Math.min(i + 1, queue.length))
@@ -359,6 +388,38 @@ export default function QuickCategorize({
                 )
               })}
             </div>
+
+            {/* client / attendees — required for business meals & entertainment */}
+            {current.expense_type === 'business' && current.category_requires_client === 1 && (
+              <div
+                className={`rounded-lg border px-4 py-3 ${
+                  currentNeedsClient ? 'border-amber-300 bg-amber-50' : 'border-emerald-200 bg-emerald-50'
+                }`}
+              >
+                <label className="block text-sm font-medium text-slate-700">
+                  {currentNeedsClient ? '⚠ ' : '✓ '}Client / attendees
+                  <span className="ml-1 font-normal text-slate-500">— IRS substantiation for business meals</span>
+                </label>
+                <input
+                  ref={clientInputRef}
+                  className="input mt-1 w-full"
+                  placeholder="e.g. Acme Corp — J. Smith"
+                  value={clientDraft}
+                  onChange={(e) => setClientDraft(e.target.value)}
+                  onBlur={() => saveClient(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      saveClient(true)
+                    }
+                  }}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Press <kbd className="font-mono">Enter</kbd> to save &amp; continue, or <kbd className="font-mono">→</kbd> to
+                  skip for now.
+                </p>
+              </div>
+            )}
 
             {/* last action / rule prompt */}
             {lastAction && (
