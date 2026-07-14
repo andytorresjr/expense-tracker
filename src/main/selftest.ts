@@ -5,7 +5,7 @@
  * neutral expense type, type toggling with lock semantics.
  */
 import { app } from 'electron'
-import { existsSync, unlinkSync } from 'fs'
+import { existsSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import * as XLSX from 'xlsx'
 import { initDb, closeDb } from './db'
@@ -17,6 +17,17 @@ import { getKpis } from './ipc'
 import { buildCsv, buildExportFileName, buildXlsx } from './export'
 import { confirmLink, getLedger, getReviewQueue, getUnmatchedCharges, rejectLink, runMatch } from './matcher'
 import { setReconConfig } from './reconcile'
+import {
+  ASSIGNMENT_FORMAT,
+  ASSIGNMENT_VERSION,
+  buildAssignmentPacket,
+  fetchAssignmentRows,
+  fetchReturnedRows,
+  importAssignment,
+  loadPacketCategories,
+  mergeAssignment,
+  readAssignmentPacket
+} from './assignment'
 import type { Card, ColumnMapping, CommitRow, ExpenseType } from '@shared/types'
 
 let failures = 0
@@ -638,6 +649,134 @@ export async function runSelfTest(): Promise<number> {
   const clientHeader = clientCsv.trim().split(/\r?\n/)[0]
   check('export csv: Client column appears once a client is recorded', clientHeader.includes('Client'), clientHeader)
   check('export csv: client name is written out', clientCsv.includes('Acme Corp'), 'missing client value')
+
+  // Per-transaction comment: stored as free text, surfaced in export only once set.
+  const noCommentHeader = buildCsv(fetchTransactionsForExport(db, { expenseType: 'all', cardId: exportCard.id }))
+    .trim()
+    .split(/\r?\n/)[0]
+  check('comment: no Comment column before any comment is set', !noCommentHeader.includes('Comment'), noCommentHeader)
+  db.prepare('UPDATE transactions SET comment = ? WHERE id = ?').run('Split with personal lunch', diningOneId)
+  const storedComment = (db.prepare('SELECT comment FROM transactions WHERE id = ?').get(diningOneId) as { comment: string | null }).comment
+  check('comment: value persists on the transaction', storedComment === 'Split with personal lunch', `got ${storedComment}`)
+  const commentCsv = buildCsv(fetchTransactionsForExport(db, { expenseType: 'all', cardId: exportCard.id }))
+  const commentHeader = commentCsv.trim().split(/\r?\n/)[0]
+  check('export csv: Comment column appears once a comment is recorded', commentHeader.includes('Comment'), commentHeader)
+  check('export csv: comment text is written out', commentCsv.includes('Split with personal lunch'), 'missing comment value')
+
+  console.log('\n[11c] Cardholder assignment round-trip (export → import → categorize → merge)')
+  db.prepare("INSERT INTO cards (name) VALUES ('Assignment Boss Card')").run()
+  const assignCard = db.prepare("SELECT * FROM cards WHERE name = 'Assignment Boss Card'").get() as Card
+  const assignRows: CommitRow[] = [
+    { txn_date: '2026-04-01', description: 'PEDRO DINNER MEETING', amount: 120, expense_type: null, category_id: null, cardholder: 'PEDRO PAGE' },
+    { txn_date: '2026-04-02', description: 'PEDRO FLIGHT AUSTIN', amount: 300, expense_type: null, category_id: null, cardholder: 'PEDRO PAGE' },
+    { txn_date: '2026-04-03', description: 'PEDRO OFFICE STORE', amount: 45, expense_type: null, category_id: null, cardholder: 'PEDRO PAGE' }
+  ]
+  commitImport(db, assignCard.id, 'assign-boss.csv', assignRows)
+
+  // Boss exports PEDRO PAGE's charges as an 'assigned' packet.
+  const fetched = fetchAssignmentRows(db, { cardholder: 'PEDRO PAGE' })
+  check('assignment: boss export gathers all 3 of the cardholder rows', fetched.rows.length === 3, `got ${fetched.rows.length}`)
+  check('assignment: each row carries an id:hash round-trip token', fetched.rows.every((r) => /^\d+:[0-9a-f]{64}$/.test(r.ref)), JSON.stringify(fetched.rows.map((r) => r.ref)))
+  const assignedBuffer = buildAssignmentPacket(
+    {
+      format: ASSIGNMENT_FORMAT,
+      version: ASSIGNMENT_VERSION,
+      stage: 'assigned',
+      appVersion: '0.0.0-selftest',
+      cardName: fetched.cardName,
+      cardholder: 'PEDRO PAGE',
+      exportedAt: '2026-06-26T00:00:00.000Z'
+    },
+    loadPacketCategories(db),
+    fetched.rows
+  )
+  const assignedPath = join(app.getPath('userData'), 'selftest-assignment.xlsx')
+  writeFileSync(assignedPath, assignedBuffer)
+  const assignedPacket = readAssignmentPacket(assignedPath)
+  check('assignment: packet round-trips as stage=assigned', assignedPacket.meta.stage === 'assigned')
+  check('assignment: packet carries 3 rows + the category list', assignedPacket.rows.length === 3 && assignedPacket.categories.length > 0, `${assignedPacket.rows.length} rows, ${assignedPacket.categories.length} cats`)
+  check('assignment: rejects a newer packet format', (() => {
+    const meta = { ...assignedPacket.meta, version: ASSIGNMENT_VERSION + 1 }
+    const buf = buildAssignmentPacket(meta, [], assignedPacket.rows)
+    const p = join(app.getPath('userData'), 'selftest-assignment-future.xlsx')
+    writeFileSync(p, buf)
+    let threw = false
+    try {
+      readAssignmentPacket(p)
+    } catch {
+      threw = true
+    }
+    if (existsSync(p)) unlinkSync(p)
+    return threw
+  })())
+
+  // Cardholder imports into their own (separate) copy — simulate with a distinct
+  // card name so the same DB stands in for both sides.
+  assignedPacket.meta.cardName = 'PEDRO inbox'
+  const importResult = importAssignment(db, assignedPacket, 'assignment.xlsx')
+  check('assignment: cardholder import inserts all 3 rows', importResult.inserted === 3, JSON.stringify(importResult))
+  const importedRows = db.prepare('SELECT id, source_token FROM transactions WHERE card_id = ? ORDER BY txn_date').all(importResult.cardId) as { id: number; source_token: string }[]
+  check('assignment: imported rows carry the round-trip token', importedRows.length === 3 && importedRows.every((r) => /^\d+:[0-9a-f]{64}$/.test(r.source_token)), JSON.stringify(importedRows.map((r) => r.source_token)))
+  // Re-importing the same packet updates in place, never duplicates.
+  const reImport = importAssignment(db, assignedPacket, 'assignment.xlsx')
+  check('assignment: re-import updates in place (0 new, 3 updated)', reImport.inserted === 0 && reImport.updated === 3, JSON.stringify(reImport))
+
+  // Cardholder categorizes: flight → Travel/business, dinner → business + client.
+  const flightId = importedRows.find((_, i) => i === 1)!.id // 2026-04-02 PEDRO FLIGHT
+  const dinnerId = importedRows.find((_, i) => i === 0)!.id // 2026-04-01 PEDRO DINNER
+  db.prepare('UPDATE transactions SET expense_type = ?, category_id = ?, type_locked = 1, category_locked = 1 WHERE id = ?').run('business', travelId, flightId)
+  db.prepare('UPDATE transactions SET expense_type = ?, client = ?, type_locked = 1 WHERE id = ?').run('business', 'Acme Corp — P. Page', dinnerId)
+
+  // Cardholder exports the categorized work back as a 'returned' packet.
+  const returnedRows = fetchReturnedRows(db, importResult.cardId)
+  check('assignment: return export carries all 3 assigned rows', returnedRows.length === 3, `got ${returnedRows.length}`)
+  const returnedBuffer = buildAssignmentPacket(
+    {
+      format: ASSIGNMENT_FORMAT,
+      version: ASSIGNMENT_VERSION,
+      stage: 'returned',
+      appVersion: '0.0.0-selftest',
+      cardName: 'PEDRO inbox',
+      cardholder: 'PEDRO PAGE',
+      exportedAt: '2026-06-26T00:00:00.000Z'
+    },
+    loadPacketCategories(db),
+    returnedRows
+  )
+  const returnedPath = join(app.getPath('userData'), 'selftest-assignment-return.xlsx')
+  writeFileSync(returnedPath, returnedBuffer)
+  const returnedPacket = readAssignmentPacket(returnedPath)
+  check('assignment: returned packet round-trips as stage=returned', returnedPacket.meta.stage === 'returned')
+
+  // Boss merges the returned packet onto the ORIGINAL rows (matched by token).
+  const mergeResult = mergeAssignment(db, returnedPacket)
+  check('assignment: merge updates the 2 categorized rows', mergeResult.updated === 2 && mergeResult.unmatched === 0, JSON.stringify(mergeResult))
+  check('assignment: merge reports no unknown categories', mergeResult.unmatchedCategories.length === 0, JSON.stringify(mergeResult.unmatchedCategories))
+  const bossFlight = db.prepare("SELECT expense_type, category_id, type_locked, category_locked FROM transactions WHERE card_id = ? AND description = 'PEDRO FLIGHT AUSTIN'").get(assignCard.id) as { expense_type: string | null; category_id: number | null; type_locked: number; category_locked: number }
+  check('assignment: boss flight row now Travel/business and locked', bossFlight.expense_type === 'business' && bossFlight.category_id === travelId && bossFlight.type_locked === 1 && bossFlight.category_locked === 1, JSON.stringify(bossFlight))
+  const bossDinner = db.prepare("SELECT expense_type, client FROM transactions WHERE card_id = ? AND description = 'PEDRO DINNER MEETING'").get(assignCard.id) as { expense_type: string | null; client: string | null }
+  check('assignment: boss dinner row gained business type + client name', bossDinner.expense_type === 'business' && bossDinner.client === 'Acme Corp — P. Page', JSON.stringify(bossDinner))
+
+  // A tampered/stale token (right id, wrong hash) must NOT update a row.
+  const staleId = (db.prepare("SELECT id FROM transactions WHERE card_id = ? AND description = 'PEDRO OFFICE STORE'").get(assignCard.id) as { id: number }).id
+  const tampered = mergeAssignment(db, {
+    meta: returnedPacket.meta,
+    categories: [],
+    rows: [{ ref: `${staleId}:deadbeef`, date: '2026-04-03', description: 'PEDRO OFFICE STORE', amount: 45, type: 'personal', category: '', cardholder: 'PEDRO PAGE', client: '', businessPurpose: '' }]
+  })
+  check('assignment: hash mismatch is rejected, not applied', tampered.updated === 0 && tampered.unmatched === 1, JSON.stringify(tampered))
+  const untouched = db.prepare('SELECT expense_type FROM transactions WHERE id = ?').get(staleId) as { expense_type: string | null }
+  check('assignment: the mismatched row stayed unchanged', untouched.expense_type === null, JSON.stringify(untouched))
+
+  // An unknown category name is surfaced, not silently created.
+  const unknownCat = mergeAssignment(db, {
+    meta: returnedPacket.meta,
+    categories: [],
+    rows: [{ ref: returnedRows[0].ref, date: returnedRows[0].date, description: returnedRows[0].description, amount: returnedRows[0].amount, type: '', category: 'Nonexistent Category', cardholder: '', client: '', businessPurpose: '' }]
+  })
+  check('assignment: unknown category name reported', unknownCat.unmatchedCategories.includes('Nonexistent Category'), JSON.stringify(unknownCat.unmatchedCategories))
+
+  for (const p of [assignedPath, returnedPath]) if (existsSync(p)) unlinkSync(p)
 
   console.log('\n[12] Reconciliation: match statement charges to POs')
   db.prepare("INSERT INTO cards (name) VALUES ('Recon Test Amex')").run()

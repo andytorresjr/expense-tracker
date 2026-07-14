@@ -74,6 +74,7 @@ export default function QuickCategorize({
   // Hotkeys are computed once from the initial data so they stay stable while you work.
   const [hotkeys, setHotkeys] = useState<Map<number, string>>(new Map())
   const [clientDraft, setClientDraft] = useState('')
+  const [commentDraft, setCommentDraft] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
   const clientInputRef = useRef<HTMLInputElement>(null)
   // NULL is the app's uncategorized state; assigning the seeded namesake would lock the row.
@@ -118,9 +119,10 @@ export default function QuickCategorize({
   const currentNeedsClient =
     !!current && current.expense_type === 'business' && current.category_requires_client === 1 && !current.client?.trim()
 
-  // Keep the client draft in sync with whichever transaction is showing.
+  // Keep the client and comment drafts in sync with whichever transaction is showing.
   useEffect(() => {
     setClientDraft(current?.client ?? '')
+    setCommentDraft(current?.comment ?? '')
   }, [current?.id])
 
   const patchCurrent = (patch: Partial<Txn>): void =>
@@ -158,6 +160,15 @@ export default function QuickCategorize({
       api.transactions.update(current.id, { client: value }).catch((e) => setError(e.message))
     }
     if (advance) setIndex((i) => Math.min(i + 1, queue.length))
+  }
+
+  const saveComment = (): void => {
+    if (!current) return
+    const value = commentDraft.trim() || null
+    if (value !== (current.comment ?? null)) {
+      patchCurrent({ comment: value })
+      api.transactions.update(current.id, { comment: value }).catch((e) => setError(e.message))
+    }
   }
 
   const skip = (): void => setIndex((i) => Math.min(i + 1, queue.length))
@@ -420,6 +431,21 @@ export default function QuickCategorize({
                 </p>
               </div>
             )}
+
+            {/* comment — optional free-text note, available on every transaction */}
+            <div>
+              <label className="block text-sm text-slate-500 mb-1">
+                Comment <span className="text-slate-400">(optional)</span>
+              </label>
+              <textarea
+                className="input w-full"
+                rows={2}
+                placeholder="Add a note about this transaction…"
+                value={commentDraft}
+                onChange={(e) => setCommentDraft(e.target.value)}
+                onBlur={saveComment}
+              />
+            </div>
 
             {/* last action / rule prompt */}
             {lastAction && (

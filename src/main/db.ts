@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   cardholder TEXT,
   client TEXT,
   business_purpose TEXT,
+  comment TEXT,
+  source_token TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -359,6 +361,27 @@ function ensureTransactionClientColumns(database: Database.Database): void {
   }
 }
 
+/** Add the round-trip token column used by the cardholder-assignment workflow.
+ *  On a cardholder's copy it carries the boss transaction's `id:dedupe_hash`, so a
+ *  returned packet merges back onto the exact originating rows; null on ordinary
+ *  rows. Plain ALTER, safe after the table-rebuild migrations above. */
+function ensureTransactionSourceTokenColumn(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(transactions)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'source_token')) {
+    database.exec('ALTER TABLE transactions ADD COLUMN source_token TEXT')
+  }
+}
+
+/** Add the optional free-text comment column. A general per-transaction note the
+ *  user can jot from the Transactions table or Quick Categorize — separate from
+ *  the IRS business-purpose field. Plain ALTER, safe after the rebuilds above. */
+function ensureTransactionCommentColumn(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(transactions)').all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'comment')) {
+    database.exec('ALTER TABLE transactions ADD COLUMN comment TEXT')
+  }
+}
+
 /** Add the per-category "requires a client name" flag. Existing databases get it
  *  defaulted on for the seeded Meals & Entertainment category; fresh databases
  *  get the same default at seed time (see REQUIRES_CLIENT). */
@@ -392,6 +415,8 @@ export function initDb(dbPath: string): Database.Database {
   ensureTransactionCardholderColumn(db)
   ensureProfileCardholderColumn(db)
   ensureTransactionClientColumns(db)
+  ensureTransactionSourceTokenColumn(db)
+  ensureTransactionCommentColumn(db)
   ensureCategoryHotkeyColumn(db)
   ensureCategoryRequiresClientColumn(db)
 

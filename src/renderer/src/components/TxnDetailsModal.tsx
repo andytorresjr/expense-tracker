@@ -3,9 +3,9 @@ import type { Txn } from '@shared/types'
 import { fmtMoney } from '../api'
 
 /**
- * Edit the IRS-substantiation fields on a single transaction: the client /
- * attendees present and the business purpose. Both are optional free text; the
- * client is what the warning badge and "missing client" filter key off of.
+ * Edit the free-text fields on a single transaction: the client / attendees
+ * present, the business purpose, and a general comment. All optional; the client
+ * is what the warning badge and "missing client" filter key off of.
  */
 export default function TxnDetailsModal({
   txn,
@@ -19,13 +19,18 @@ export default function TxnDetailsModal({
   /** true when this is a business charge in a client-required category with no client yet. */
   needsClient: boolean
   onCancel: () => void
-  onSave: (fields: { client: string | null; business_purpose: string | null }) => void
+  onSave: (fields: { client: string | null; business_purpose: string | null; comment: string | null }) => void
 }): React.JSX.Element {
   const [client, setClient] = useState(txn.client ?? '')
   const [purpose, setPurpose] = useState(txn.business_purpose ?? '')
+  const [comment, setComment] = useState(txn.comment ?? '')
 
   const submit = (): void =>
-    onSave({ client: client.trim() || null, business_purpose: purpose.trim() || null })
+    onSave({
+      client: client.trim() || null,
+      business_purpose: purpose.trim() || null,
+      comment: comment.trim() || null
+    })
 
   return (
     <div
@@ -82,6 +87,18 @@ export default function TxnDetailsModal({
             placeholder="e.g. Q3 contract review"
             value={purpose}
             onChange={(e) => setPurpose(e.target.value)}
+            disabled={busy}
+          />
+        </label>
+
+        <label className="block text-sm text-slate-600">
+          Comment <span className="text-slate-400">(optional)</span>
+          <textarea
+            className="input block w-full mt-1"
+            rows={2}
+            placeholder="Any note about this transaction"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
             disabled={busy}
           />
         </label>

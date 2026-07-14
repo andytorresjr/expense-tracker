@@ -26,6 +26,11 @@ import type {
   ReconSyncResult,
   ReconTestResult,
   ReconUnmatchedCharge,
+  AssignmentCardholder,
+  AssignmentImportResult,
+  AssignmentMergeResult,
+  AssignmentPickResult,
+  AssignmentReturnableCard,
   TransactionClearRequest,
   TransactionDeleteResult,
   Txn,
@@ -85,6 +90,7 @@ export const api = {
         expense_type?: ExpenseType | null
         client?: string | null
         business_purpose?: string | null
+        comment?: string | null
       }
     ) => call<Txn>('transactions.update', { id, ...fields }),
     bulkUpdate: (
@@ -94,6 +100,7 @@ export const api = {
         expense_type?: ExpenseType | null
         client?: string | null
         business_purpose?: string | null
+        comment?: string | null
       }
     ) => call<number>('transactions.bulkUpdate', { ids, ...fields }),
     clear: (request: TransactionClearRequest) => call<TransactionDeleteResult>('transactions.clear', request),
@@ -111,6 +118,16 @@ export const api = {
       call<ImportResult>('import.commit', { cardId, filename, rows }),
     batches: () => call<ImportBatch[]>('import.batches'),
     deleteBatch: (id: number) => call<TransactionDeleteResult>('import.deleteBatch', { id })
+  },
+  assignment: {
+    cardholders: () => call<AssignmentCardholder[]>('assignment.cardholders'),
+    export: (cardholder: string, dateFrom?: string, dateTo?: string) =>
+      call<ExportResult | null>('assignment.export', { cardholder, dateFrom, dateTo }),
+    returnableCards: () => call<AssignmentReturnableCard[]>('assignment.returnableCards'),
+    exportReturn: (cardId: number) => call<ExportResult | null>('assignment.exportReturn', { cardId }),
+    pick: () => call<AssignmentPickResult | null>('assignment.pick'),
+    import: (path: string) => call<AssignmentImportResult>('assignment.import', { path }),
+    merge: (path: string) => call<AssignmentMergeResult>('assignment.merge', { path })
   },
   dashboard: {
     getKpis: (filters: KpiFilters) => call<Kpis>('dashboard.getKpis', filters),

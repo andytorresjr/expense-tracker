@@ -6,11 +6,20 @@ import CategoriesRules from './screens/CategoriesRules'
 import Dashboard from './screens/Dashboard'
 import QuickReports from './screens/QuickReports'
 import Reconciliation from './screens/Reconciliation'
+import Assignments from './screens/Assignments'
 import Settings from './screens/Settings'
 import LockScreen from './components/LockScreen'
 import { getLockConfig } from './lock'
 
-type Screen = 'dashboard' | 'transactions' | 'import' | 'categories' | 'reports' | 'reconciliation' | 'settings'
+type Screen =
+  | 'dashboard'
+  | 'transactions'
+  | 'import'
+  | 'categories'
+  | 'reports'
+  | 'reconciliation'
+  | 'assignments'
+  | 'settings'
 
 const NAV: { id: Screen; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -19,6 +28,7 @@ const NAV: { id: Screen; label: string; icon: string }[] = [
   { id: 'categories', label: 'Categories & Rules', icon: '🏷️' },
   { id: 'reports', label: 'Quick Reports', icon: '⚡' },
   { id: 'reconciliation', label: 'PO Matching', icon: '🔗' },
+  { id: 'assignments', label: 'Cardholder Assignments', icon: '📨' },
   { id: 'settings', label: 'Settings', icon: '⚙️' }
 ]
 
@@ -168,6 +178,7 @@ export default function App(): React.JSX.Element {
             {screen === 'categories' && <CategoriesRules />}
             {screen === 'reports' && <QuickReports />}
             {screen === 'reconciliation' && <Reconciliation />}
+            {screen === 'assignments' && <Assignments />}
             {screen === 'settings' && <Settings />}
           </main>
         </div>

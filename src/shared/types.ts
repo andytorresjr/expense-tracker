@@ -55,6 +55,8 @@ export interface Txn {
   client: string | null
   /** Optional free-text business purpose for the expense. */
   business_purpose: string | null
+  /** Optional free-text note the user can attach to any transaction. */
+  comment: string | null
   card_name: string
   category_name: string | null
   /** 1 when this transaction's category requires a client name (joined from categories). */
@@ -224,6 +226,62 @@ export interface Kpis {
 }
 
 export type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string }
+
+// ---- Cardholder assignment round-trip ----
+
+/** Direction of an assignment packet: 'assigned' = boss → cardholder (to
+ *  categorize), 'returned' = cardholder → boss (to merge back). */
+export type AssignmentStage = 'assigned' | 'returned'
+
+/** Header metadata stamped into every assignment packet. */
+export interface AssignmentMeta {
+  format: string
+  version: number
+  stage: AssignmentStage
+  appVersion: string
+  cardName: string
+  cardholder: string
+  exportedAt: string
+}
+
+/** Result of inspecting a chosen packet file before acting on it. */
+export interface AssignmentPickResult {
+  path: string
+  meta: AssignmentMeta
+  rowCount: number
+  categoryCount: number
+}
+
+/** A cardholder with charges, offered when the boss picks who to send to. */
+export interface AssignmentCardholder {
+  cardholder: string
+  count: number
+}
+
+/** A card holding assigned (round-trip token) rows the cardholder can send back. */
+export interface AssignmentReturnableCard {
+  cardId: number
+  cardName: string
+  count: number
+}
+
+/** Outcome of a cardholder importing an 'assigned' packet. */
+export interface AssignmentImportResult {
+  cardId: number
+  cardName: string
+  inserted: number
+  updated: number
+  categoriesAdded: number
+}
+
+/** Outcome of the boss merging a 'returned' packet back into their data. */
+export interface AssignmentMergeResult {
+  total: number
+  updated: number
+  unmatched: number
+  /** Category names the cardholder used that don't exist on the boss's side. */
+  unmatchedCategories: string[]
+}
 
 // ---- Reconciliation: matching statement charges to PO Automation records ----
 

@@ -158,7 +158,10 @@ export default function Transactions(): React.JSX.Element {
   const bulkCategory = (value: string): Promise<void> =>
     run(() => api.transactions.bulkUpdate([...selected], { category_id: value ? Number(value) : null }).then(() => {}))
 
-  const saveDetails = (txn: Txn, fields: { client: string | null; business_purpose: string | null }): Promise<void> =>
+  const saveDetails = (
+    txn: Txn,
+    fields: { client: string | null; business_purpose: string | null; comment: string | null }
+  ): Promise<void> =>
     run(async () => {
       await api.transactions.update(txn.id, fields)
       setDetailsTxn(null)
@@ -440,7 +443,16 @@ export default function Transactions(): React.JSX.Element {
                   />
                 </td>
                 <td className="px-4 py-2 whitespace-nowrap">{txn.txn_date}</td>
-                <td className="px-4 py-2 max-w-96 truncate" title={txn.description}>{txn.description}</td>
+                <td className="px-4 py-2 max-w-96">
+                  <button
+                    onClick={() => setDetailsTxn(txn)}
+                    className="flex items-center gap-1.5 max-w-full text-left hover:text-blue-600"
+                    title={txn.comment ? `${txn.description}\n💬 ${txn.comment}` : `${txn.description}\n(click to add a comment or details)`}
+                  >
+                    <span className="truncate">{txn.description}</span>
+                    {txn.comment && <span className="shrink-0 text-slate-400" title={txn.comment}>💬</span>}
+                  </button>
+                </td>
                 <td className={`px-4 py-2 text-right whitespace-nowrap ${txn.amount < 0 ? 'text-green-600' : ''}`}>
                   {fmtMoney(txn.amount)}
                 </td>

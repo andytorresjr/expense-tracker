@@ -6,13 +6,14 @@ import type { ExportFormat, KpiFilters, Txn, TxnFilters } from '@shared/types'
  *  Purpose are each appended only when the data carries them, so statements
  *  without those fields export unchanged. */
 const BASE_COLUMNS = ['Date', 'Description', 'Amount', 'Type', 'Category', 'Card'] as const
-type Column = (typeof BASE_COLUMNS)[number] | 'Cardholder' | 'Client' | 'Business Purpose'
+type Column = (typeof BASE_COLUMNS)[number] | 'Cardholder' | 'Client' | 'Business Purpose' | 'Comment'
 
 function exportColumns(rows: Txn[]): Column[] {
   const columns: Column[] = [...BASE_COLUMNS]
   if (rows.some((txn) => txn.cardholder)) columns.push('Cardholder')
   if (rows.some((txn) => txn.client)) columns.push('Client')
   if (rows.some((txn) => txn.business_purpose)) columns.push('Business Purpose')
+  if (rows.some((txn) => txn.comment)) columns.push('Comment')
   return columns
 }
 function categorySegment(filters: TxnFilters, rows: Txn[]): string | null {
@@ -97,7 +98,8 @@ function toRecord(txn: Txn): Record<Column, string | number> {
     Card: txn.card_name,
     Cardholder: txn.cardholder ?? '',
     Client: txn.client ?? '',
-    'Business Purpose': txn.business_purpose ?? ''
+    'Business Purpose': txn.business_purpose ?? '',
+    Comment: txn.comment ?? ''
   }
 }
 

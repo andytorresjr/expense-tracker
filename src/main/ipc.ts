@@ -9,6 +9,19 @@ import { clearTransactions, deleteCard, deleteImportBatch } from './cleanup'
 import { appendWhere, buildTxnWhere, fetchCardholderSpend, fetchTransactionsForExport, TXN_SORT_EXPRESSIONS } from './query'
 import { buildCsv, buildDashboardFileName, buildExportFileName, buildReportFileName, buildXlsx } from './export'
 import { checkForUpdates } from './updater'
+import {
+  ASSIGNMENT_FORMAT,
+  ASSIGNMENT_VERSION,
+  buildAssignmentPacket,
+  fetchAssignmentRows,
+  fetchReturnedRows,
+  importAssignment,
+  listAssignmentCardholders,
+  listReturnableCards,
+  loadPacketCategories,
+  mergeAssignment,
+  readAssignmentPacket
+} from './assignment'
 import { getReconConfig, setReconConfig, syncPurchaseOrders, testReconConnection } from './reconcile'
 import { confirmLink, getLedger, getReviewQueue, getUnmatchedCharges, rejectLink, runMatch } from './matcher'
 import type {
@@ -25,8 +38,25 @@ import type {
   Kpis,
   ReconConfigInput,
   TransactionClearRequest,
-  TxnFilters
+  TxnFilters,
+  AssignmentCardholder,
+  AssignmentImportResult,
+  AssignmentMergeResult,
+  AssignmentPickResult,
+  AssignmentReturnableCard
 } from '@shared/types'
+
+function sanitizeFilePart(value: string): string {
+  return (
+    value
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase()
+      .slice(0, 60) || 'cardholder'
+  )
+}
 
 const RESERVED_HOTKEYS = new Set(['b', 'p', 'r'])
 const INCOME_CATEGORY_SQL = "lower(COALESCE(c.name, '')) = 'income'"
@@ -322,6 +352,7 @@ export function registerIpcHandlers(): void {
       expense_type?: ExpenseType | null
       client?: string | null
       business_purpose?: string | null
+      comment?: string | null
     }) => {
       const db = getDb()
       if (p.category_id !== undefined) {
@@ -338,6 +369,9 @@ export function registerIpcHandlers(): void {
       if (p.business_purpose !== undefined) {
         db.prepare('UPDATE transactions SET business_purpose = ? WHERE id = ?').run(p.business_purpose?.trim() || null, p.id)
       }
+      if (p.comment !== undefined) {
+        db.prepare('UPDATE transactions SET comment = ? WHERE id = ?').run(p.comment?.trim() || null, p.id)
+      }
       return db.prepare('SELECT * FROM transactions WHERE id = ?').get(p.id)
     }
   )
@@ -349,18 +383,21 @@ export function registerIpcHandlers(): void {
       expense_type?: ExpenseType | null
       client?: string | null
       business_purpose?: string | null
+      comment?: string | null
     }) => {
       const db = getDb()
       const updCat = db.prepare('UPDATE transactions SET category_id = ?, category_locked = 1 WHERE id = ?')
       const updType = db.prepare('UPDATE transactions SET expense_type = ?, type_locked = 1 WHERE id = ?')
       const updClient = db.prepare('UPDATE transactions SET client = ? WHERE id = ?')
       const updPurpose = db.prepare('UPDATE transactions SET business_purpose = ? WHERE id = ?')
+      const updComment = db.prepare('UPDATE transactions SET comment = ? WHERE id = ?')
       const run = db.transaction(() => {
         for (const id of p.ids) {
           if (p.category_id !== undefined) updCat.run(p.category_id, id)
           if (p.expense_type !== undefined) updType.run(p.expense_type, id)
           if (p.client !== undefined) updClient.run(p.client?.trim() || null, id)
           if (p.business_purpose !== undefined) updPurpose.run(p.business_purpose?.trim() || null, id)
+          if (p.comment !== undefined) updComment.run(p.comment?.trim() || null, id)
         }
       })
       run()
@@ -423,6 +460,100 @@ export function registerIpcHandlers(): void {
       writeFileSync(result.filePath, pdf)
     }
     return { path: result.filePath, count: rows.length } satisfies ExportResult
+  })
+
+  // ---- cardholder assignment round-trip ----
+  // Boss: who can I send to? Cardholders with charges, biggest first.
+  handle('assignment.cardholders', () => listAssignmentCardholders(getDb()) as AssignmentCardholder[])
+  // Boss: export one cardholder's charges as an assignment packet to categorize.
+  handle(
+    'assignment.export',
+    async (p: { cardholder: string; dateFrom?: string; dateTo?: string }): Promise<ExportResult | null> => {
+      const db = getDb()
+      const { cardName, rows } = fetchAssignmentRows(db, p)
+      if (rows.length === 0) throw new Error(`No charges found for ${p.cardholder} in the selected range.`)
+      const win = BrowserWindow.getFocusedWindow()
+      const exportedAt = new Date().toISOString()
+      const buffer = buildAssignmentPacket(
+        {
+          format: ASSIGNMENT_FORMAT,
+          version: ASSIGNMENT_VERSION,
+          stage: 'assigned',
+          appVersion: app.getVersion(),
+          cardName,
+          cardholder: p.cardholder,
+          exportedAt
+        },
+        loadPacketCategories(db),
+        rows
+      )
+      const result = await dialog.showSaveDialog(win ?? new BrowserWindow({ show: false }), {
+        title: `Export assignment for ${p.cardholder}`,
+        defaultPath: `assignment-${sanitizeFilePart(p.cardholder)}-${exportedAt.slice(0, 10)}.xlsx`,
+        filters: [{ name: 'Assignment packet (Excel)', extensions: ['xlsx'] }]
+      })
+      if (result.canceled || !result.filePath) return null
+      writeFileSync(result.filePath, buffer)
+      return { path: result.filePath, count: rows.length }
+    }
+  )
+  // Cardholder: which imported cards can I send back?
+  handle('assignment.returnableCards', () => listReturnableCards(getDb()) as AssignmentReturnableCard[])
+  // Cardholder: export my categorized work back to the boss.
+  handle('assignment.exportReturn', async (p: { cardId: number }): Promise<ExportResult | null> => {
+    const db = getDb()
+    const card = db.prepare('SELECT name FROM cards WHERE id = ?').get(p.cardId) as { name: string } | undefined
+    if (!card) throw new Error('Card not found.')
+    const rows = fetchReturnedRows(db, p.cardId)
+    if (rows.length === 0) throw new Error('No assigned transactions to send back for this card.')
+    const win = BrowserWindow.getFocusedWindow()
+    const exportedAt = new Date().toISOString()
+    const buffer = buildAssignmentPacket(
+      {
+        format: ASSIGNMENT_FORMAT,
+        version: ASSIGNMENT_VERSION,
+        stage: 'returned',
+        appVersion: app.getVersion(),
+        cardName: card.name,
+        cardholder: rows.find((r) => r.cardholder)?.cardholder ?? '',
+        exportedAt
+      },
+      loadPacketCategories(db),
+      rows
+    )
+    const result = await dialog.showSaveDialog(win ?? new BrowserWindow({ show: false }), {
+      title: 'Export categorized work to send back',
+      defaultPath: `assignment-return-${sanitizeFilePart(card.name)}-${exportedAt.slice(0, 10)}.xlsx`,
+      filters: [{ name: 'Assignment packet (Excel)', extensions: ['xlsx'] }]
+    })
+    if (result.canceled || !result.filePath) return null
+    writeFileSync(result.filePath, buffer)
+    return { path: result.filePath, count: rows.length }
+  })
+  // Open a packet and report what it is, before importing or merging.
+  handle('assignment.pick', async (): Promise<AssignmentPickResult | null> => {
+    const win = BrowserWindow.getFocusedWindow()
+    const result = await dialog.showOpenDialog(win ?? new BrowserWindow({ show: false }), {
+      title: 'Open an assignment packet',
+      filters: [{ name: 'Assignment packet (Excel)', extensions: ['xlsx'] }],
+      properties: ['openFile']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const path = result.filePaths[0]
+    const packet = readAssignmentPacket(path)
+    return { path, meta: packet.meta, rowCount: packet.rows.length, categoryCount: packet.categories.length }
+  })
+  // Cardholder: import an 'assigned' packet's rows to categorize.
+  handle('assignment.import', (p: { path: string }): AssignmentImportResult => {
+    const db = getDb()
+    const packet = readAssignmentPacket(p.path)
+    return importAssignment(db, packet, basename(p.path))
+  })
+  // Boss: merge a 'returned' packet's categorizations back onto the original rows.
+  handle('assignment.merge', (p: { path: string }): AssignmentMergeResult => {
+    const db = getDb()
+    const packet = readAssignmentPacket(p.path)
+    return mergeAssignment(db, packet)
   })
 
   // ---- import ----
