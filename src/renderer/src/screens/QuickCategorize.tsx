@@ -132,6 +132,9 @@ export default function QuickCategorize({
     if (!current || current.expense_type === type) return
     patchCurrent({ expense_type: type })
     api.transactions.update(current.id, { expense_type: type }).catch((e) => setError(e.message))
+    // Choosing a type completes this quick-categorize step, just like choosing
+    // a category. Advance immediately for both the buttons and B/P hotkeys.
+    setIndex((i) => Math.min(i + 1, queue.length))
   }
 
   const assignCategory = (categoryId: number): void => {
@@ -462,7 +465,7 @@ export default function QuickCategorize({
 
             {/* legend */}
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 border-t border-slate-100 pt-3">
-              <span><kbd className="font-mono">B</kbd>/<kbd className="font-mono">P</kbd> set type</span>
+              <span><kbd className="font-mono">B</kbd>/<kbd className="font-mono">P</kbd> set type &amp; next</span>
               <span><kbd className="font-mono">key</kbd> set category &amp; next</span>
               <span><kbd className="font-mono">R</kbd> make rule</span>
               <span><kbd className="font-mono">→</kbd>/<kbd className="font-mono">Enter</kbd> skip</span>
