@@ -4,6 +4,9 @@ All notable changes to Expense Tracker. The same notes appear on each
 [GitHub release](https://github.com/andytorresjr/expense-tracker/releases), and the
 in-app updater shows them when a new version is found.
 
+## 1.3.0-beta.6 — 2026-07-20
+- Quick Categorize: setting the business/personal type now advances to the next transaction, matching how category selection already behaves.
+
 ## 1.3.0-beta.5 — 2026-07-14
 - Added **Cardholder Assignments** (new sidebar page): hand each cardholder only their own charges to categorize. The owner exports a cardholder's charges as an Excel packet, the cardholder opens it and categorizes with the same category names and hotkeys (business/personal, category, client/attendees), then sends the file back and the owner merges every decision onto the exact original transactions. Each row carries a round-trip token so returned rows update in place and can't be mis-matched.
 - Added **per-transaction comments**: attach an optional free-text note to any transaction — separate from the IRS business-purpose field. Edit it from the transaction details modal or inline in Quick Categorize; a 💬 marker shows on any commented transaction, and the note is included in CSV/Excel exports when present.
